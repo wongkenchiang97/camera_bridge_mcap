@@ -1,0 +1,12 @@
+/build*/
+/cmake-build-*/
+/out/
+/vcpkg_installed/
+/CMakeUserPresets.json
+/compile_commands.json
+/.cache/
+/.vs/
+.DS_Store
+Thumbs.db
+*.log
+*.mcap
