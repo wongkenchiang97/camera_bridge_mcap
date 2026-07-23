@@ -23,6 +23,14 @@ Humble installation can inspect and play the standard sensor topics.
 host timestamp. `/amr/camera_timing` preserves source ID, device time, steady
 clock mapping, timestamp source, and uncertainty.
 
+Replay correlates timing metadata by `(source_id, stream_kind,
+host_timestamp_us)` rather than assuming a timing record is adjacent to its
+sensor payload. This keeps existing recordings valid when concurrent color,
+depth, and IMU callbacks interleaved their MCAP records. New recordings write
+each timing record and sensor payload under one recorder lock so the pair is
+atomic. If an exact timing record is unavailable, replay retains the sensor
+header timestamp as the device-time fallback.
+
 Frame IDs are always numbered, including single-camera recordings:
 `camera0_color_optical_frame`, `camera0_depth_optical_frame`, and
 `camera0_imu_frame`. This keeps one-camera and multi-camera datasets compatible.
@@ -63,11 +71,30 @@ that are written to MCAP.
 
 ## Status
 
+### 2026-07-23 checkpoint
+
 The first milestone records and replays raw color, raw depth, IMU, calibration,
-static extrinsics, and bridge timing. Rosbag2 `metadata.yaml`, segmentation,
-lossless-compressed mapping profiles, CLI tools, and vSLAM selection flags are
-the next integration steps.
+static extrinsics, and bridge timing. MSVC builds pass with both CDR and
+round-trip tests. Full-fidelity replay of the 1.23 GiB
+`mapping_room.mcap` recording through VSLAM reached EOF at approximately
+30.9 Hz color/depth and 203.8 Hz IMU. The timing-correlation fix reduced
+aggregated RGB-D ingress drops from 3238 in the pre-fix run to 11, enabled
+784 visual frames and 78 runtime VIO commits, and produced persistent mapping
+nodes. The remaining 11 depth drops also occur in repeated corrected runs and
+belong to downstream VSLAM scheduling rather than MCAP timestamp association.
 
 Channels are created lazily for every observed `source_id`, so one MCAP can
 contain independently calibrated cameras with different resolutions without
 interleaving them on one ROS topic.
+
+Next work:
+
+1. Add a deterministic legacy-record regression that explicitly writes
+   interleaved timing and sensor records instead of relying only on the
+   recorder's now-atomic output.
+2. Expose producer completion status, decode errors, and terminal message
+   counts so EOF is distinguishable from an asynchronous decode failure.
+3. Bound or stream the replay timing index for multi-hour, large-scale mapping
+   recordings.
+4. Add rosbag2 `metadata.yaml`, segmentation, mapping profiles, and standalone
+   recorder/player CLI tools as product requirements mature.
