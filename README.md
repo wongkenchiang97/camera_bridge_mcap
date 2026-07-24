@@ -87,6 +87,28 @@ Channels are created lazily for every observed `source_id`, so one MCAP can
 contain independently calibrated cameras with different resolutions without
 interleaving them on one ROS topic.
 
+### 2026-07-24 synchronized Orbbec checkpoint
+
+The Linux library build and both CDR and round-trip tests pass against the
+shared `camera_bridge_core` producer, numbered stream-name, and frame-ID
+contracts. The Orbbec recorder produced
+`recordings/office_small_loop.mcap`, and ROS 2 inspection reported:
+
+- duration: 58.187815 seconds;
+- size: 1.6 GiB;
+- total messages: 30,249;
+- color/depth images: 1,733 each;
+- IMU messages: 11,657;
+- color/depth camera info: one each;
+- static TF messages: one;
+- timing messages: 15,123;
+- SHA-256:
+  `06e02db9cc9c670fe7a5c772783e71d4cdb91f2e240c4f26a948e485d13aeec4`.
+
+Playback was observed working. Exact replay completion status and terminal
+per-stream counters were not retained, so deterministic replay accounting
+remains open.
+
 Next work:
 
 1. Add a deterministic legacy-record regression that explicitly writes
