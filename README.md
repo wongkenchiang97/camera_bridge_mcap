@@ -56,13 +56,29 @@ intrinsics, `T_left_right`, the IMU-to-left-camera transform, and recorded IMU
 samples. ZED depth, positional tracking, and startup self-calibration are
 disabled. Existing output files are never overwritten.
 
+For a fresh machine, clone `camera_bridge_core`, `camera_bridge_mcap`, and
+`vcpkg` as sibling directories. Install a ZED SDK compatible with the machine's
+NVIDIA driver/CUDA runtime, bootstrap vcpkg, then configure with the committed
+`vcpkg.json` manifest:
+
 ```bash
+../vcpkg/bootstrap-vcpkg.sh
 cmake -S . -B build-ninja-linux -G Ninja \
+  -DCMAKE_TOOLCHAIN_FILE=../vcpkg/scripts/buildsystems/vcpkg.cmake \
+  -DCAMERA_BRIDGE_CORE_SOURCE_DIR=../camera_bridge_core \
   -DCAMERA_BRIDGE_MCAP_BUILD_ZED_SVO_CONVERTER=ON
 cmake --build build-ninja-linux --target camera_bridge_zed_svo_to_mcap
 ./build-ninja-linux/camera_bridge_zed_svo_to_mcap \
   /path/input.svo2 /path/output.mcap 0
 ```
+
+The final argument is the numeric camera source ID. For this project's office
+recordings it is `0`. Regeneration is semantically reproducible from the SVO2:
+the converter reads the recording's images, timestamps, calibration,
+extrinsics, and IMU and emits the same topic contract. Treat a regenerated
+MCAP as a new artifact and validate its stream counts and calibration; a
+byte-identical MCAP SHA-256 is not promised across ZED SDK or dependency
+versions.
 
 Building requires the SDK/toolkit; running H.264/H.265 SVO2 playback also
 requires a working supported NVIDIA GPU and driver. The converter returns an
