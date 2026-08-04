@@ -12,8 +12,10 @@ Humble installation can inspect and play the standard sensor topics.
 | Topic | Type |
 |---|---|
 | `/camera{source_id}/color/image_raw` | `sensor_msgs/msg/Image` (`bgr8`) |
+| `/camera{source_id}/right/image_raw` | `sensor_msgs/msg/Image` (`bgr8`) |
 | `/camera{source_id}/depth/image_raw` | `sensor_msgs/msg/Image` (`16UC1`) |
 | `/camera{source_id}/color/camera_info` | `sensor_msgs/msg/CameraInfo` |
+| `/camera{source_id}/right/camera_info` | `sensor_msgs/msg/CameraInfo` |
 | `/camera{source_id}/depth/camera_info` | `sensor_msgs/msg/CameraInfo` |
 | `/camera{source_id}/imu/data_raw` | `sensor_msgs/msg/Imu` |
 | `/tf_static` | `tf2_msgs/msg/TFMessage` |
@@ -32,7 +34,8 @@ atomic. If an exact timing record is unavailable, replay retains the sensor
 header timestamp as the device-time fallback.
 
 Frame IDs are always numbered, including single-camera recordings:
-`camera0_color_optical_frame`, `camera0_depth_optical_frame`, and
+`camera0_color_optical_frame`, `camera0_right_optical_frame`,
+`camera0_depth_optical_frame`, and
 `camera0_imu_frame`. This keeps one-camera and multi-camera datasets compatible.
 
 ## Build
@@ -43,6 +46,27 @@ cmake -S . -B build-ninja-msvc -G Ninja `
 cmake --build build-ninja-msvc
 ctest --test-dir build-ninja-msvc --output-on-failure
 ```
+
+## Optional ZED SVO2 converter
+
+When the ZED SDK and CUDA toolkit are installed, the Linux build creates
+`camera_bridge_zed_svo_to_mcap`. It uses the ZED SDK for proprietary SVO2
+demux/decode and writes rectified left/right BGR images, SDK-resolved rectified
+intrinsics, `T_left_right`, the IMU-to-left-camera transform, and recorded IMU
+samples. ZED depth, positional tracking, and startup self-calibration are
+disabled. Existing output files are never overwritten.
+
+```bash
+cmake -S . -B build-ninja-linux -G Ninja \
+  -DCAMERA_BRIDGE_MCAP_BUILD_ZED_SVO_CONVERTER=ON
+cmake --build build-ninja-linux --target camera_bridge_zed_svo_to_mcap
+./build-ninja-linux/camera_bridge_zed_svo_to_mcap \
+  /path/input.svo2 /path/output.mcap 0
+```
+
+Building requires the SDK/toolkit; running H.264/H.265 SVO2 playback also
+requires a working supported NVIDIA GPU and driver. The converter returns an
+error before creating the output MCAP when `sl::Camera::open()` fails.
 
 ## Optional Foxglove live sink
 
@@ -108,6 +132,27 @@ contracts. The Orbbec recorder produced
 Playback was observed working. Exact replay completion status and terminal
 per-stream counters were not retained, so deterministic replay accounting
 remains open.
+
+### 2026-08-04 rectified stereo checkpoint
+
+The optional ZED converter built against SDK 5.4/CUDA 12.2 and decoded
+`stereo_office_small_loop.svo2` on the RTX 4060 host. The corrected immutable
+output is
+`/media/lips/DATA1/recordings/stereo_office_small_loop_rectified_r2.mcap`:
+
+- duration: 50.045395 seconds;
+- size: 10,271,386,791 bytes;
+- rectified left/right images: 1,502 each;
+- IMU samples: 5,895;
+- vendor depth images: zero;
+- stereo transform: `T_left_right = [+0.119796619, 0, 0] m`;
+- SHA-256:
+  `5870076d39f4f368b33b1eecc92e360c8b776f951fcc5191f517a94be81e1f84`.
+
+Full-fidelity vSLAM stereo-shadow R14 consumed the recording at `1.0x`, reached clean
+EOF with exit code zero, and accounted for all 1,502 stereo pairs. The
+downstream bounded worker processed 1,493 and explicitly dropped nine by
+policy; no transport or decode loss was inferred from those worker drops.
 
 Next work:
 

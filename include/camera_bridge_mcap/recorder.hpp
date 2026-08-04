@@ -32,6 +32,7 @@ class Ros2McapRecorder final : public bridge::IFrameConsumer {
   [[nodiscard]] bool running() const;
 
   void onColorFrame(const bridge::ColorFrameEvent& event) override;
+  void onRightFrame(const bridge::RightFrameEvent& event) override;
   void onDepthFrame(const bridge::DepthFrameEvent& event) override;
   void onImuSample(const bridge::ImuSampleEvent& event) override;
   void onExtrinsics(const bridge::ExtrinsicsEvent& event) override;

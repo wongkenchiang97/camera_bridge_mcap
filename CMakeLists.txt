@@ -7,6 +7,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(CAMERA_BRIDGE_MCAP_BUILD_TESTING "Build camera_bridge_mcap tests" ON)
 option(CAMERA_BRIDGE_MCAP_WITH_FOXGLOVE "Enable optional live Foxglove WebSocket sink" OFF)
+option(CAMERA_BRIDGE_MCAP_BUILD_ZED_SVO_CONVERTER
+       "Build the optional ZED SVO2 to rectified stereo MCAP converter" ON)
 set(FOXGLOVE_SDK_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../foxglove-sdk"
     CACHE PATH "Foxglove SDK root containing include and lib")
 set(CAMERA_BRIDGE_CORE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../camera_bridge_core"
@@ -21,6 +23,24 @@ if(NOT TARGET camera_bridge::core)
                      "${CMAKE_CURRENT_BINARY_DIR}/camera_bridge_core")
   else()
     find_package(camera_bridge_core CONFIG REQUIRED)
+  endif()
+endif()
+
+if(CAMERA_BRIDGE_MCAP_BUILD_ZED_SVO_CONVERTER)
+  find_package(ZED QUIET)
+  find_package(CUDAToolkit QUIET)
+  if(ZED_FOUND AND CUDAToolkit_FOUND)
+    add_executable(camera_bridge_zed_svo_to_mcap
+      tools/zed_svo_to_mcap.cpp)
+    target_include_directories(camera_bridge_zed_svo_to_mcap PRIVATE
+      ${ZED_INCLUDE_DIRS})
+    target_link_directories(camera_bridge_zed_svo_to_mcap PRIVATE
+      ${ZED_LIBRARY_DIR})
+    target_link_libraries(camera_bridge_zed_svo_to_mcap PRIVATE
+      camera_bridge_mcap ${ZED_LIBRARIES} CUDA::cuda_driver CUDA::cudart)
+  else()
+    message(STATUS
+      "ZED SDK or CUDA toolkit not found; skipping camera_bridge_zed_svo_to_mcap")
   endif()
 endif()
 
