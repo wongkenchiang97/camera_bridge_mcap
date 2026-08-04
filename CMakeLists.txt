@@ -15,6 +15,7 @@ set(CAMERA_BRIDGE_CORE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../camera_bridge_
     CACHE PATH "Path to camera_bridge_core")
 
 find_package(OpenCV REQUIRED COMPONENTS core imgcodecs imgproc)
+set(CAMERA_BRIDGE_MCAP_OPENCV_DIR "${OpenCV_DIR}")
 find_package(unofficial-mcap CONFIG REQUIRED)
 
 if(NOT TARGET camera_bridge::core)
@@ -28,6 +29,11 @@ endif()
 
 if(CAMERA_BRIDGE_MCAP_BUILD_ZED_SVO_CONVERTER)
   find_package(ZED QUIET)
+  # The Windows ZED package force-writes OpenCV_DIR to its bundled OpenCV 3.1
+  # compatibility copy. Restore the already-resolved project OpenCV package so
+  # subsequent CMake runs do not compile against 3.1 and link against vcpkg.
+  set(OpenCV_DIR "${CAMERA_BRIDGE_MCAP_OPENCV_DIR}"
+      CACHE PATH "OpenCV package directory" FORCE)
   find_package(CUDAToolkit QUIET)
   if(ZED_FOUND AND CUDAToolkit_FOUND)
     add_executable(camera_bridge_zed_svo_to_mcap

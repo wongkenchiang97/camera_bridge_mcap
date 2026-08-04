@@ -20,6 +20,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- Restored the vcpkg OpenCV package directory after loading the Windows ZED
+  SDK CMake package, which otherwise force-cached its bundled OpenCV 3.1 path
+  and could compile against 3.1 headers while linking vcpkg OpenCV 4.x.
 - Corrected the ZED converter's stereo TF direction so the SDK-provided right
   camera pose is published as `T_left_right`. Replay inversion now yields the
   negative `T_right_left` baseline required by positive rectified disparity,
