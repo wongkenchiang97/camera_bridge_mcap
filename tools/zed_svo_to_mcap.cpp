@@ -1,3 +1,5 @@
+#include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -46,21 +48,60 @@ cv::Mat bgrFromZed(sl::Mat& image) {
   return bgr;
 }
 
+cv::Mat depthU16FromZed(sl::Mat& depth) {
+  if (depth.getDataType() != sl::MAT_TYPE::U16_C1 ||
+      depth.getMemoryType() != sl::MEM::CPU) {
+    throw std::runtime_error("ZED depth is not CPU U16_C1");
+  }
+  return cv::Mat(
+      static_cast<int>(depth.getHeight()),
+      static_cast<int>(depth.getWidth()),
+      CV_16UC1,
+      depth.getPtr<sl::ushort1>(sl::MEM::CPU),
+      depth.getStepBytes(sl::MEM::CPU)).clone();
+}
+
+sl::DEPTH_MODE parseDepthMode(std::string value) {
+  std::transform(value.begin(), value.end(), value.begin(),
+                 [](unsigned char c) {
+                   return static_cast<char>(std::tolower(c));
+                 });
+  if (value == "none") return sl::DEPTH_MODE::NONE;
+  if (value == "performance") return sl::DEPTH_MODE::PERFORMANCE;
+  if (value == "quality") return sl::DEPTH_MODE::QUALITY;
+  if (value == "ultra") return sl::DEPTH_MODE::ULTRA;
+  if (value == "neural_light") return sl::DEPTH_MODE::NEURAL_LIGHT;
+  if (value == "neural") return sl::DEPTH_MODE::NEURAL;
+  if (value == "neural_plus") return sl::DEPTH_MODE::NEURAL_PLUS;
+  throw std::invalid_argument(
+      "depth_mode must be none, performance, quality, ultra, "
+      "neural_light, neural, or neural_plus");
+}
+
 void emitCalibration(
     camera_bridge_mcap::Ros2McapRecorder& recorder,
     uint32_t source_id,
     uint64_t timestamp_us,
     const sl::CalibrationParameters& calibration,
-    const sl::SensorsConfiguration& sensors) {
+    const sl::SensorsConfiguration& sensors,
+    bool depth_enabled) {
   bridge::CameraCalibrationEvent event;
   event.source_id = source_id;
   event.timestamp_us = timestamp_us;
   event.has_color = true;
   event.has_right = true;
+  event.has_depth = depth_enabled;
   event.color_intrinsic = intrinsicFromZed(calibration.left_cam);
   event.right_intrinsic = intrinsicFromZed(calibration.right_cam);
+  if (depth_enabled) {
+    // DEPTH_U16_MM is registered to the rectified left image.
+    event.depth_intrinsic = event.color_intrinsic;
+  }
   event.color_frame_id = bridge::cameraColorOpticalFrame(source_id);
   event.right_frame_id = bridge::cameraRightOpticalFrame(source_id);
+  if (depth_enabled) {
+    event.depth_frame_id = bridge::cameraDepthOpticalFrame(source_id);
+  }
   recorder.onCameraCalibration(event);
 
   bridge::ExtrinsicsEvent extrinsics;
@@ -85,6 +126,16 @@ void emitCalibration(
   transform.extrinsic.trans[2] = translation.z;
   transform.extrinsic.translation_scale_to_meters = 1.0;
   extrinsics.transforms.push_back(transform);
+  if (depth_enabled) {
+    bridge::ExtrinsicTransformEvent depth_transform;
+    depth_transform.parent_frame_id = event.color_frame_id;
+    depth_transform.child_frame_id = event.depth_frame_id;
+    depth_transform.extrinsic.rot[0] = 1.0F;
+    depth_transform.extrinsic.rot[4] = 1.0F;
+    depth_transform.extrinsic.rot[8] = 1.0F;
+    depth_transform.extrinsic.translation_scale_to_meters = 1.0;
+    extrinsics.transforms.push_back(depth_transform);
+  }
   bridge::ExtrinsicTransformEvent imu_transform;
   imu_transform.parent_frame_id = event.color_frame_id;
   imu_transform.child_frame_id = bridge::cameraImuFrame(source_id);
@@ -147,16 +198,26 @@ void emitImuBatch(
 }  // namespace
 
 int main(int argc, char** argv) {
-  if (argc < 3 || argc > 4) {
+  if (argc < 3 || argc > 5) {
     std::cerr << "Usage: camera_bridge_zed_svo_to_mcap "
-                 "<input.svo2> <output.mcap> [source_id]\n";
+                 "<input.svo2> <output.mcap> [source_id] [depth_mode]\n";
     return 2;
   }
   const std::filesystem::path input_path(argv[1]);
   const std::filesystem::path output_path(argv[2]);
-  const uint32_t source_id = argc == 4
+  const uint32_t source_id = argc >= 4
       ? static_cast<uint32_t>(std::stoul(argv[3]))
       : 0;
+  sl::DEPTH_MODE depth_mode = sl::DEPTH_MODE::NONE;
+  try {
+    if (argc == 5) {
+      depth_mode = parseDepthMode(argv[4]);
+    }
+  } catch (const std::exception& e) {
+    std::cerr << "Invalid depth mode: " << e.what() << "\n";
+    return 2;
+  }
+  const bool depth_enabled = depth_mode != sl::DEPTH_MODE::NONE;
   if (!std::filesystem::is_regular_file(input_path)) {
     std::cerr << "Input SVO2 does not exist: " << input_path << "\n";
     return 2;
@@ -170,7 +231,7 @@ int main(int argc, char** argv) {
   sl::Camera camera;
   sl::InitParameters init;
   init.input.setFromSVOFile(input_path.string().c_str());
-  init.depth_mode = sl::DEPTH_MODE::NONE;
+  init.depth_mode = depth_mode;
   init.camera_disable_self_calib = true;
   init.coordinate_units = sl::UNIT::METER;
   init.sdk_verbose = 1;
@@ -196,6 +257,7 @@ int main(int argc, char** argv) {
       information.camera_configuration.calibration_parameters;
   sl::Mat left;
   sl::Mat right;
+  sl::Mat depth;
   uint64_t frames = 0;
   uint64_t imu_samples = 0;
   uint64_t last_imu_timestamp_us = 0;
@@ -230,7 +292,8 @@ int main(int argc, char** argv) {
           source_id,
           timestamp_us,
           calibration,
-          information.sensors_configuration);
+          information.sensors_configuration,
+          depth_enabled);
       calibration_emitted = true;
     }
     bridge::ColorFrameEvent left_event;
@@ -247,6 +310,24 @@ int main(int argc, char** argv) {
     right_event.frame_id = bridge::cameraRightOpticalFrame(source_id);
     right_event.bgr = bgrFromZed(right);
     recorder.onRightFrame(right_event);
+    if (depth_enabled) {
+      if (camera.retrieveMeasure(
+              depth, sl::MEASURE::DEPTH_U16_MM, sl::MEM::CPU) !=
+          sl::ERROR_CODE::SUCCESS) {
+        std::cerr << "ZED registered depth retrieval failed at frame "
+                  << frames << "\n";
+        recorder.stop();
+        camera.close();
+        return 5;
+      }
+      bridge::DepthFrameEvent depth_event;
+      depth_event.source_id = source_id;
+      depth_event.timestamp_us = timestamp_us;
+      depth_event.device_timestamp_us = timestamp_us;
+      depth_event.frame_id = bridge::cameraDepthOpticalFrame(source_id);
+      depth_event.depth_mono16 = depthU16FromZed(depth);
+      recorder.onDepthFrame(depth_event);
+    }
 
     std::vector<sl::SensorsData> sensor_batch;
     if (camera.getSensorsDataBatch(sensor_batch) == sl::ERROR_CODE::SUCCESS) {
@@ -268,6 +349,7 @@ int main(int argc, char** argv) {
   camera.close();
   std::cout << "\nConverted frames=" << frames
             << " imu_batches_with_data=" << imu_samples
+            << " depth_mode=" << sl::toString(depth_mode)
             << " serial=" << information.serial_number
             << " output=" << output_path << "\n";
   return frames == 0 ? 6 : 0;

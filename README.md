@@ -53,8 +53,9 @@ When the ZED SDK and CUDA toolkit are installed, the Linux build creates
 `camera_bridge_zed_svo_to_mcap`. It uses the ZED SDK for proprietary SVO2
 demux/decode and writes rectified left/right BGR images, SDK-resolved rectified
 intrinsics, `T_left_right`, the IMU-to-left-camera transform, and recorded IMU
-samples. ZED depth, positional tracking, and startup self-calibration are
-disabled. Existing output files are never overwritten.
+samples. Positional tracking and startup self-calibration are disabled. ZED
+depth is disabled by default and can be explicitly enabled as a registered
+16-bit millimeter stream. Existing output files are never overwritten.
 
 For a fresh machine, clone `camera_bridge_core`, `camera_bridge_mcap`, and
 `vcpkg` as sibling directories. Install a ZED SDK compatible with the machine's
@@ -72,8 +73,22 @@ cmake --build build-ninja-linux --target camera_bridge_zed_svo_to_mcap
   /path/input.svo2 /path/output.mcap 0
 ```
 
-The final argument is the numeric camera source ID. For this project's office
-recordings it is `0`. Regeneration is semantically reproducible from the SVO2:
+The third positional argument is the numeric camera source ID. For this
+project's office recordings it is `0`. The optional fourth argument selects
+`none`, `performance`, `quality`, `ultra`, `neural_light`, `neural`, or
+`neural_plus`. For example, an opt-in registered-depth conversion is:
+
+```bash
+./build-ninja-linux/camera_bridge_zed_svo_to_mcap \
+  /path/input.svo2 /path/output_with_depth.mcap 0 neural
+```
+
+Depth-enabled conversion records ZED `DEPTH_U16_MM` aligned to the rectified
+left image, publishes matching intrinsics, and publishes an identity
+color-to-depth transform. It requires the selected SDK depth module and
+substantially increases conversion time and MCAP size.
+
+Regeneration is semantically reproducible from the SVO2:
 the converter reads the recording's images, timestamps, calibration,
 extrinsics, and IMU and emits the same topic contract. Treat a regenerated
 MCAP as a new artifact and validate its stream counts and calibration; a

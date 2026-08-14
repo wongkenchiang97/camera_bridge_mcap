@@ -14,9 +14,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `/cameraN/right/camera_info`, including independent timing metadata and
   producer counters. Depth remains a separate optional stream.
 - Added an optional ZED-SDK SVO2 converter for deterministic rectified stereo
-  MCAP generation. It disables self-calibration, depth, and tracking; exports
+  MCAP generation. It disables self-calibration and tracking; exports
   resolved rectified intrinsics, stereo and IMU extrinsics, synchronized BGR
   images, and recorded IMU; and refuses to overwrite existing output.
+- Added explicit opt-in ZED registered-depth conversion. A selected SDK depth
+  mode records `DEPTH_U16_MM`, left-registered depth calibration, and the
+  identity color-to-depth transform. The default remains `none`, preserving
+  the established stereo-only artifact contract.
 
 ### Fixed
 
@@ -38,6 +42,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - Linux build completed and both `camera_bridge_mcap_cdr_test` and
   `camera_bridge_mcap_roundtrip_test` passed.
+- The opt-in ZED-depth converter compiles against SDK 5.4/CUDA 12.2, and its
+  invalid-mode CLI gate was exercised. Full SVO2 depth conversion and stream
+  validation remain pending because they create a new multi-gigabyte artifact.
 - The ZED converter target built and ran against SDK 5.4/CUDA 12.2 on the RTX
   4060 host. It converted all 1,502 pairs and 5,895 IMU samples from
   `stereo_office_small_loop.svo2` into the structurally verified
