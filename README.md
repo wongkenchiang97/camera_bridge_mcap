@@ -99,6 +99,21 @@ Building requires the SDK/toolkit; running H.264/H.265 SVO2 playback also
 requires a working supported NVIDIA GPU and driver. The converter returns an
 error before creating the output MCAP when `sl::Camera::open()` fails.
 
+### 2026-08-17 registered neural-depth checkpoint
+
+The opt-in command converted `stereo_office_small_loop.svo2` into
+`stereo_office_small_loop_rectified_depth_neural_r1.mcap` using ZED `neural`
+depth. The immutable result is 12,231,322,683 bytes, spans 50.045395 seconds,
+and has SHA-256
+`6d1d521ad609d2aac640ad61cc298972f19102d5b3aaec1ce656f6af04e536bf`.
+Its indexed streams contain exactly 1,502 rectified left, right, and registered
+depth frames, 5,895 IMU samples, one calibration message for each camera, one
+static-TF message, and 10,401 timing records. Left/right/depth image timestamps
+are strictly increasing and identical. Calibration is 1920x1200 with
+`fx=fy=722.904724`, `cx=966.502319`, and `cy=602.865417`; the stereo baseline
+is `+0.119796619 m` and color-to-depth is identity. First/middle/last depth
+samples are `16UC1` and contain 99.45%, 99.38%, and 99.37% nonzero pixels.
+
 ## Optional Foxglove live sink
 
 The recorder can expose the same ROS 2 CDR messages to Foxglove over a

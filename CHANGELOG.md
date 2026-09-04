@@ -43,8 +43,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Linux build completed and both `camera_bridge_mcap_cdr_test` and
   `camera_bridge_mcap_roundtrip_test` passed.
 - The opt-in ZED-depth converter compiles against SDK 5.4/CUDA 12.2, and its
-  invalid-mode CLI gate was exercised. Full SVO2 depth conversion and stream
-  validation remain pending because they create a new multi-gigabyte artifact.
+  invalid-mode CLI gate was exercised. Neural-depth conversion produced the
+  12,231,322,683-byte `stereo_office_small_loop_rectified_depth_neural_r1.mcap`
+  with exactly 1,502 left/right/depth frames and 5,895 IMU samples. All image
+  timestamps match exactly; calibration and three static extrinsics are
+  complete; sampled depth has about 99.4% nonzero coverage. SHA-256 is
+  `6d1d521ad609d2aac640ad61cc298972f19102d5b3aaec1ce656f6af04e536bf`.
 - The ZED converter target built and ran against SDK 5.4/CUDA 12.2 on the RTX
   4060 host. It converted all 1,502 pairs and 5,895 IMU samples from
   `stereo_office_small_loop.svo2` into the structurally verified
