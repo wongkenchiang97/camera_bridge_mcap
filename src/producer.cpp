@@ -3,10 +3,12 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <cstdio>
 #include <mcap/reader.hpp>
 #include <mutex>
 #include <optional>
 #include <unordered_map>
+#include <utility>
 
 namespace camera_bridge_mcap {
 namespace {
@@ -31,6 +33,44 @@ namespace {
         }
     };
     using TimingIndex = std::unordered_map<TimingKey, TimingMessage, TimingKeyHash>;
+
+    class TimedReadable final : public mcap::IReadable {
+    public:
+        explicit TimedReadable(mcap::IReadable& source)
+            : source_(source) {}
+
+        uint64_t size() const override { return source_.size(); }
+
+        uint64_t read(std::byte** output, uint64_t offset, uint64_t size) override
+        {
+            const auto begin = std::chrono::steady_clock::now();
+            const uint64_t bytes = source_.read(output, offset, size);
+            const auto duration = static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::steady_clock::now() - begin).count());
+            ++interval_samples_;
+            interval_total_us_ += duration;
+            interval_max_us_ = std::max(interval_max_us_, duration);
+            interval_bytes_ += bytes;
+            return bytes;
+        }
+
+        void consumeInterval(uint64_t* samples, uint64_t* total_us,
+            uint64_t* max_us, uint64_t* bytes)
+        {
+            *samples = std::exchange(interval_samples_, 0);
+            *total_us = std::exchange(interval_total_us_, 0);
+            *max_us = std::exchange(interval_max_us_, 0);
+            *bytes = std::exchange(interval_bytes_, 0);
+        }
+
+    private:
+        mcap::IReadable& source_;
+        uint64_t interval_samples_ = 0;
+        uint64_t interval_total_us_ = 0;
+        uint64_t interval_max_us_ = 0;
+        uint64_t interval_bytes_ = 0;
+    };
 
     bridge::FrameTiming frameTiming(const TimingMessage& t)
     {
@@ -120,8 +160,16 @@ public:
         reader.close();
         if (!active)
             return;
-        s = reader.open(options.input_path.string());
+        std::FILE* replay_file = std::fopen(options.input_path.string().c_str(), "rb");
+        if (!replay_file) {
+            active = false;
+            return;
+        }
+        mcap::FileReader replay_file_reader(replay_file);
+        TimedReadable replay_timed_reader(replay_file_reader);
+        s = reader.open(replay_timed_reader);
         if (!s.ok()) {
+            std::fclose(replay_file);
             active = false;
             return;
         }
@@ -142,10 +190,34 @@ public:
         };
         for (const auto& v : reader.readMessages()) {
             const auto iteration_begin = std::chrono::steady_clock::now();
-            recordStage(elapsedUs(previous_iteration_end, iteration_begin),
+            const uint64_t iterator_advance_us =
+                elapsedUs(previous_iteration_end, iteration_begin);
+            recordStage(iterator_advance_us,
                 &bridge::ProducerStats::iterator_advance_samples,
                 &bridge::ProducerStats::iterator_advance_total_us,
                 &bridge::ProducerStats::iterator_advance_max_us);
+            uint64_t source_read_samples = 0;
+            uint64_t source_read_us = 0;
+            uint64_t source_read_max_us = 0;
+            uint64_t source_read_bytes = 0;
+            replay_timed_reader.consumeInterval(
+                &source_read_samples, &source_read_us, &source_read_max_us,
+                &source_read_bytes);
+            {
+                std::lock_guard<std::mutex> lock(mu);
+                stats.source_read_samples += source_read_samples;
+                stats.source_read_total_us += source_read_us;
+                stats.source_read_max_us =
+                    std::max(stats.source_read_max_us, source_read_max_us);
+                stats.source_read_bytes += source_read_bytes;
+            }
+            recordStage(
+                iterator_advance_us > source_read_us
+                    ? iterator_advance_us - source_read_us
+                    : 0,
+                &bridge::ProducerStats::iterator_internal_samples,
+                &bridge::ProducerStats::iterator_internal_total_us,
+                &bridge::ProducerStats::iterator_internal_max_us);
             if (!active)
                 break;
             const auto topic = v.channel->topic;
@@ -357,6 +429,7 @@ public:
             }
         }
         reader.close();
+        std::fclose(replay_file);
         active = false;
     }
     Options options;

@@ -168,6 +168,9 @@ int main()
     if (bridge::cameraTopicPrefix(12) != "/camera12" || bridge::cameraDepthOpticalFrame(12) != "camera12_depth_optical_frame" || bridge::cameraRightOpticalFrame(12) != "camera12_right_optical_frame")
         return 8;
     if (producerStats.iterator_advance_samples == 0
+        || producerStats.source_read_samples == 0
+        || producerStats.source_read_bytes == 0
+        || producerStats.iterator_internal_samples == 0
         || producerStats.replay_wait_samples == 0
         || producerStats.decode_construct_samples != 8
         || producerStats.consumer_callback_samples != 8
