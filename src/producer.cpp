@@ -8,6 +8,7 @@
 #include <mutex>
 #include <optional>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 namespace camera_bridge_mcap {
@@ -16,6 +17,7 @@ namespace {
     constexpr uint8_t kDepthStream = 2;
     constexpr uint8_t kImuStream = 3;
     constexpr uint8_t kRightStream = 4;
+    constexpr uint8_t kAccelStream = 5;
 
     struct TimingKey {
         uint32_t source_id;
@@ -33,6 +35,7 @@ namespace {
         }
     };
     using TimingIndex = std::unordered_map<TimingKey, TimingMessage, TimingKeyHash>;
+    using AmbiguousTiming = std::unordered_set<TimingKey, TimingKeyHash>;
 
     class TimedReadable final : public mcap::IReadable {
     public:
@@ -96,9 +99,12 @@ namespace {
             throw std::runtime_error("invalid camera source topic");
         return static_cast<uint32_t>(std::stoul(topic.substr(sizeof(prefix) - 1, end - (sizeof(prefix) - 1))));
     }
-    std::optional<TimingMessage> findTiming(const TimingIndex& index, uint32_t source, uint8_t kind, uint64_t host)
+    std::optional<TimingMessage> findTiming(const TimingIndex& index,
+        const AmbiguousTiming& ambiguous, uint32_t source, uint8_t kind, uint64_t host)
     {
-        const auto found = index.find({ source, kind, host });
+        const TimingKey key { source, kind, host };
+        if (ambiguous.count(key)) return std::nullopt;
+        const auto found = index.find(key);
         if (found == index.end())
             return std::nullopt;
         return found->second;
@@ -143,14 +149,23 @@ public:
             return;
         }
         TimingIndex timingIndex;
+        AmbiguousTiming ambiguousTiming;
         for (const auto& v : reader.readMessages()) {
             if (!active)
                 break;
-            if (v.channel->topic != "/amr/camera_timing")
+            const auto& timingTopic = v.channel->topic;
+            if (timingTopic != "/amr/camera_timing" &&
+                timingTopic.find("/imu/gyro/device_time") == std::string::npos &&
+                timingTopic.find("/imu/accel/device_time") == std::string::npos)
                 continue;
             try {
                 auto timing = decodeTiming(reinterpret_cast<const uint8_t*>(v.message.data), static_cast<size_t>(v.message.dataSize));
-                timingIndex[{ timing.source_id, timing.stream_kind, timing.host_timestamp_us }] = std::move(timing);
+                const TimingKey key { timing.source_id, timing.stream_kind, timing.host_timestamp_us };
+                if (!ambiguousTiming.count(key) &&
+                    !timingIndex.emplace(key, timing).second) {
+                    timingIndex.erase(key);
+                    ambiguousTiming.insert(key);
+                }
             } catch (const std::exception&) {
                 active = false;
                 reader.close();
@@ -224,7 +239,9 @@ public:
             const auto* p = reinterpret_cast<const uint8_t*>(v.message.data);
             const auto n = static_cast<size_t>(v.message.dataSize);
             try {
-                if (topic == "/amr/camera_timing") {
+                if (topic == "/amr/camera_timing" ||
+                    topic.find("/imu/gyro/device_time") != std::string::npos ||
+                    topic.find("/imu/accel/device_time") != std::string::npos) {
                     previous_iteration_end = std::chrono::steady_clock::now();
                     continue;
                 }
@@ -257,7 +274,7 @@ public:
                     const bool depth = topic.find("/depth/") != std::string::npos;
                     const bool right = topic.find("/right/") != std::string::npos;
                     const uint8_t stream = depth ? kDepthStream : (right ? kRightStream : kColorStream);
-                    const auto timing = findTiming(timingIndex, source, stream, us);
+                    const auto timing = findTiming(timingIndex, ambiguousTiming, source, stream, us);
                     if (depth) {
                         if (m.encoding != "16UC1" || m.step < m.width * 2 || m.data.size() < static_cast<size_t>(m.step) * m.height)
                             throw std::runtime_error("invalid depth image");
@@ -328,19 +345,28 @@ public:
                         ++stats.color_frames_received;
                         ++stats.color_frames_decoded;
                     }
-                } else if (topic.find("/imu/data_raw") != std::string::npos) {
+                } else if (topic.find("/imu/data_raw") != std::string::npos ||
+                           topic.find("/imu/gyro") != std::string::npos ||
+                           topic.find("/imu/accel") != std::string::npos) {
                     auto m = decodeImu(p, n);
                     bridge::ImuSampleEvent e;
                     e.timestamp_us = timestampUs(m.header.stamp);
                     const uint32_t source = sourceFromTopic(topic);
-                    const auto timing = findTiming(timingIndex, source, kImuStream, e.timestamp_us);
+                    const bool rawGyro = topic.find("/imu/gyro") != std::string::npos;
+                    const bool rawAccel = topic.find("/imu/accel") != std::string::npos;
+                    const auto timing = findTiming(timingIndex, ambiguousTiming, source,
+                        rawAccel ? kAccelStream : kImuStream, e.timestamp_us);
+                    if ((rawGyro || rawAccel) && !timing) {
+                        previous_iteration_end = std::chrono::steady_clock::now();
+                        continue;
+                    }
                     e.device_timestamp_us = timing ? timing->device_timestamp_us : e.timestamp_us;
                     e.source_id = source;
                     e.frame_id = m.header.frame_id;
                     e.timing = timing ? frameTiming(*timing) : bridge::FrameTiming {};
-                    e.has_gyro = true;
+                    e.has_gyro = !rawAccel;
                     e.gyro = { static_cast<float>(m.angular_velocity[0]), static_cast<float>(m.angular_velocity[1]), static_cast<float>(m.angular_velocity[2]) };
-                    e.has_accel = true;
+                    e.has_accel = !rawGyro;
                     e.accel = { static_cast<float>(m.linear_acceleration[0]), static_cast<float>(m.linear_acceleration[1]), static_cast<float>(m.linear_acceleration[2]) };
                     const auto callback_begin = std::chrono::steady_clock::now();
                     recordStage(elapsedUs(decode_construct_begin, callback_begin),

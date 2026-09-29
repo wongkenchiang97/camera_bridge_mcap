@@ -121,4 +121,9 @@ if(CAMERA_BRIDGE_MCAP_BUILD_TESTING)
       CAMERA_BRIDGE_MCAP_TEST_LIVE_SINK=1)
   endif()
   add_test(NAME camera_bridge_mcap_roundtrip_test COMMAND camera_bridge_mcap_roundtrip_test)
+
+  add_executable(camera_bridge_mcap_split_imu_test tests/split_imu_test.cpp)
+  target_link_libraries(camera_bridge_mcap_split_imu_test PRIVATE
+    camera_bridge_mcap unofficial::mcap::mcap)
+  add_test(NAME camera_bridge_mcap_split_imu_test COMMAND camera_bridge_mcap_split_imu_test)
 endif()

@@ -2,6 +2,7 @@
 
 #include <filesystem>
 #include <memory>
+#include <map>
 #include <mutex>
 #include <string>
 
@@ -17,6 +18,10 @@ class Ros2McapRecorder final : public bridge::IFrameConsumer {
     std::string depth_frame_id = "camera_depth_optical_frame";
     std::string imu_frame_id = "camera_imu_frame";
     bool write_timing_metadata = true;
+    // New recordings may keep independent raw motion streams. The legacy
+    // combined /imu/data_raw channel remains the default for old callers.
+    bool split_raw_imu = false;
+    std::map<uint32_t, std::string> camera_namespaces;
     bool use_zstd = true;
     uint64_t chunk_size_bytes = 4 * 1024 * 1024;
     bool live_publish_enabled = false;

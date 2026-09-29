@@ -7,7 +7,7 @@ The library does **not** link ROS, DDS, `rclcpp`, or `rosbag2`. It writes MCAP
 channels with `cdr` message encoding and embedded `ros2msg` schemas so a ROS 2
 Humble installation can inspect and play the standard sensor topics.
 
-## Initial topic contract
+## Legacy topic contract
 
 | Topic | Type |
 |---|---|
@@ -21,9 +21,12 @@ Humble installation can inspect and play the standard sensor topics.
 | `/tf_static` | `tf2_msgs/msg/TFMessage` |
 | `/amr/camera_timing` | `camera_bridge_msgs/msg/FrameTiming` |
 
-`header.stamp` is the measurement time. MCAP publish/log time uses the bridge
+For existing bridge recordings, `header.stamp` is the bridge's measurement
+timestamp. The new RealSense recorder writes host-domain `header.stamp` and
+preserves the distinct raw hardware-clock timestamp in a companion message;
+the two clocks must not be conflated. MCAP publish/log time uses the bridge
 host timestamp. `/amr/camera_timing` preserves source ID, device time, steady
-clock mapping, timestamp source, and uncertainty.
+clock mapping, timestamp source, and uncertainty for legacy channels.
 
 Replay correlates timing metadata by `(source_id, stream_kind,
 host_timestamp_us)` rather than assuming a timing record is adjacent to its
@@ -31,7 +34,32 @@ sensor payload. This keeps existing recordings valid when concurrent color,
 depth, and IMU callbacks interleaved their MCAP records. New recordings write
 each timing record and sensor payload under one recorder lock so the pair is
 atomic. If an exact timing record is unavailable, replay retains the sensor
-header timestamp as the device-time fallback.
+header timestamp as the device-time fallback on legacy channels. Split raw
+IMU replay instead skips samples with missing or ambiguous exact timing;
+it never substitutes a host stamp for raw device time.
+
+## 2026-09-30 in-place RealSense recording checkpoint
+
+An opt-in `split_raw_imu` recorder mode writes independent
+`/cameraN/imu/gyro` and `/cameraN/imu/accel` standard
+`sensor_msgs/msg/Imu` channels. Each has a mirrored
+`/cameraN/imu/{gyro,accel}/device_time` companion with the exact same
+ROS header timestamp and its own raw device time, clock domain, and mapping
+data. The recorder accepts a source-ID-to-namespace map, while the replay
+producer currently requires `/camera<source_id>` to recover identity.
+Existing callers still use `/imu/data_raw` by default. The ROS 2 MCAP
+channels now include the profile's `offered_qos_profiles` metadata key as an
+empty YAML sequence; live ROS 2 bag behavior remains unverified.
+
+The MSVC build and 3/3 CTest suite pass, including a new two-source synthetic
+split-IMU test that checks exact companion stamps, raw timestamps, and
+readback without conversion. No real RealSense recording or WSL ROS 2 bag
+inspection has been performed. Next require a camera capture with distinct
+gyro/accel device-time monotonicity, unambiguous pairing, MCAP integrity,
+ROS 2 bag readability, and unchanged legacy round-trip behavior before
+calling the format production-compatible. Infrared and optional derived
+unified IMU streams remain separate implementation work in
+`realsense_bridge/RECORDER.md`.
 
 Frame IDs are always numbered, including single-camera recordings:
 `camera0_color_optical_frame`, `camera0_right_optical_frame`,
