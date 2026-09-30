@@ -14,7 +14,7 @@ set(FOXGLOVE_SDK_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../foxglove-sdk"
 set(CAMERA_BRIDGE_CORE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../camera_bridge_core"
     CACHE PATH "Path to camera_bridge_core")
 
-find_package(OpenCV REQUIRED COMPONENTS core imgcodecs imgproc)
+find_package(OpenCV REQUIRED COMPONENTS core imgcodecs imgproc features2d calib3d)
 set(CAMERA_BRIDGE_MCAP_OPENCV_DIR "${OpenCV_DIR}")
 find_package(unofficial-mcap CONFIG REQUIRED)
 
@@ -126,4 +126,11 @@ if(CAMERA_BRIDGE_MCAP_BUILD_TESTING)
   target_link_libraries(camera_bridge_mcap_split_imu_test PRIVATE
     camera_bridge_mcap unofficial::mcap::mcap)
   add_test(NAME camera_bridge_mcap_split_imu_test COMMAND camera_bridge_mcap_split_imu_test)
+
 endif()
+
+# Keep the read-only recording audit available to embedding projects such as
+# vSLAM, which disable this project's unit tests but use its OpenCV toolchain.
+add_executable(camera_bridge_mcap_recording_audit tests/recording_audit.cpp)
+target_link_libraries(camera_bridge_mcap_recording_audit PRIVATE
+  camera_bridge_mcap unofficial::mcap::mcap)

@@ -2,6 +2,7 @@
 #include <filesystem>
 #include <iostream>
 #include <map>
+#include <set>
 #include <string>
 #include <thread>
 #include <mcap/reader.hpp>
@@ -69,7 +70,8 @@ int main() {
   recorder.onCameraParameters(parameters);
   bridge::InfraredFrameEvent infrared;
   infrared.source_id=0;infrared.sensor_index=1;
-  infrared.timestamp_us=1000005;infrared.device_timestamp_us=444;
+  // Simulate a late callback carrying an earlier exact capture timestamp.
+  infrared.timestamp_us=999005;infrared.device_timestamp_us=444;
   infrared.mono8=cv::Mat(1,2,CV_8UC1);infrared.mono8.at<uint8_t>(0,0)=17;
   infrared.mono8.at<uint8_t>(0,1)=18;
   recorder.onInfraredFrame(infrared);
@@ -82,7 +84,12 @@ int main() {
   mcap::McapReader reader;
   if(!reader.open(path.string()).ok())return 2;
   std::map<std::string,uint64_t> payloadStamp,timingStamp;
+  std::set<mcap::ChannelId> channelsWithMessages;
+  mcap::Timestamp previousLogTime=0;
   for(const auto& view:reader.readMessages()) {
+    if(view.message.logTime<previousLogTime)return 17;
+    previousLogTime=view.message.logTime;
+    channelsWithMessages.insert(view.channel->id);
     const auto& topic=view.channel->topic;
     if(topic=="/camera0/recorder/parameters") {
       const auto& message=view.message;
@@ -96,6 +103,7 @@ int main() {
     if(topic=="/camera0/infrared1/image_raw") {
       const auto decoded=decodeImage(bytes,size);
       if(decoded.encoding!="mono8"||decoded.data.size()!=2||decoded.data[0]!=17)return 13;
+      if(view.message.publishTime!=999005000)return 18;
       payloadStamp[topic]=timestampUs(decoded.header.stamp);
     }
     if(topic=="/camera0/imu/data") {
@@ -122,6 +130,9 @@ int main() {
       if(timing.device_timestamp_us!=expected)return 3;
       timingStamp[topic]=timestampUs(timing.header.stamp);
     }
+  }
+  for(const auto& channel:reader.channels()) {
+    if(!channelsWithMessages.count(channel.first))return 16;
   }
   reader.close();
   if(payloadStamp.size()!=6||payloadStamp["/camera0/recorder/parameters"]!=1000004||

@@ -1,4 +1,6 @@
 #include "camera_bridge_mcap/recorder.hpp"
+#include <algorithm>
+#include <chrono>
 #include <cstring>
 #include <cmath>
 #include <map>
@@ -8,7 +10,7 @@
 #include "live_sink.hpp"
 
 namespace camera_bridge_mcap { namespace {
-struct Out { mcap::Schema schema; mcap::Channel channel; std::string schemaText; uint32_t sequence=0; };
+struct Out { mcap::Schema schema; mcap::Channel channel; std::string schemaText; uint32_t sequence=0; bool registered=false; };
 Out makeChannel(const char* topic,const char* type,const std::string& text){Out o;o.schema.name=type;o.schema.encoding="ros2msg";o.schemaText=text;o.schema.data.resize(text.size());std::memcpy(o.schema.data.data(),text.data(),text.size());o.channel.topic=topic;o.channel.messageEncoding="cdr";o.channel.metadata["offered_qos_profiles"]="[]";return o;}
 std::vector<uint8_t> bytes(const cv::Mat&m){cv::Mat c=m.isContinuous()?m:m.clone();return{c.data,c.data+c.total()*c.elemSize()};}
 TimingMessage timing(uint8_t kind,uint32_t source,uint64_t host,uint64_t device,const bridge::FrameTiming&t,const std::string&frame){TimingMessage m;m.header={rosTimeFromUs(host),frame};m.source_id=source;m.stream_kind=kind;m.host_timestamp_us=host;m.device_timestamp_us=device;m.driver_receive_steady_us=t.driver_receive_steady_us;m.capture_steady_us=t.capture_steady_us;m.capture_steady_valid=t.capture_steady_valid;m.timestamp_source=static_cast<uint8_t>(t.timestamp_source);m.clock_mapping_uncertainty_us=t.clock_mapping_uncertainty_us;return m;}
@@ -44,20 +46,15 @@ class Ros2McapRecorder::Impl { public:
        derivedImuTime(makeChannel((prefix+"/imu/data/device_time").c_str(),"camera_bridge_msgs/msg/FrameTiming",timingSchema())) {}
  };
  explicit Impl(Options o):options(std::move(o)),timingCh(makeChannel("/amr/camera_timing","camera_bridge_msgs/msg/FrameTiming",timingSchema())),tfStatic(makeChannel("/tf_static","tf2_msgs/msg/TFMessage",tfSchema())){}
- void add(Out&c){c.schema.data.resize(c.schemaText.size());std::memcpy(c.schema.data.data(),c.schemaText.data(),c.schemaText.size());writer.addSchema(c.schema);c.channel.schemaId=c.schema.id;writer.addChannel(c.channel);}
- bool open(std::string*error){std::lock_guard<std::mutex>l(mu);if(active)return true;std::error_code ec;if(!options.output_path.parent_path().empty())std::filesystem::create_directories(options.output_path.parent_path(),ec);if(ec){if(error)*error=ec.message();return false;}mcap::McapWriterOptions o("ros2");o.chunkSize=options.chunk_size_bytes;o.compression=options.use_zstd?mcap::Compression::Zstd:mcap::Compression::None;auto s=writer.open(options.output_path.string(),o);if(!s.ok()){if(error)*error=s.message;return false;}add(timingCh);add(tfStatic);if(options.live_publish_enabled){live=createLiveSink();std::string liveError;if(!live->start(options.live_publish_host,options.live_publish_port,liveError)){live.reset();if(options.live_publish_required){writer.close();if(error)*error="failed to start Foxglove live sink: "+liveError;return false;}lastLiveError=liveError;}}active=true;return true;}
- void close(){std::lock_guard<std::mutex>l(mu);if(live){live->stop();live.reset();}if(active){writer.close();active=false;}sources.clear();}
- void emit(Out&c,const std::vector<uint8_t>&data,uint64_t us){mcap::Message m;m.channelId=c.channel.id;m.sequence=c.sequence++;m.logTime=us*1000;m.publishTime=us*1000;m.data=reinterpret_cast<const std::byte*>(data.data());m.dataSize=data.size();writer.write(m);if(live){std::string liveError;if(!live->publish(c.channel.topic,c.schema.name,c.schemaText,data,us*1000,liveError))lastLiveError=liveError;}}
+ void add(Out&c){if(c.registered)return;c.schema.data.resize(c.schemaText.size());std::memcpy(c.schema.data.data(),c.schemaText.data(),c.schemaText.size());writer.addSchema(c.schema);c.channel.schemaId=c.schema.id;writer.addChannel(c.channel);c.registered=true;}
+ bool open(std::string*error){std::lock_guard<std::mutex>l(mu);if(active)return true;std::error_code ec;if(!options.output_path.parent_path().empty())std::filesystem::create_directories(options.output_path.parent_path(),ec);if(ec){if(error)*error=ec.message();return false;}mcap::McapWriterOptions o("ros2");o.chunkSize=options.chunk_size_bytes;o.compression=options.use_zstd?mcap::Compression::Zstd:mcap::Compression::None;auto s=writer.open(options.output_path.string(),o);if(!s.ok()){if(error)*error=s.message;return false;}lastLogTimeNs=0;if(options.live_publish_enabled){live=createLiveSink();std::string liveError;if(!live->start(options.live_publish_host,options.live_publish_port,liveError)){live.reset();if(options.live_publish_required){writer.close();if(error)*error="failed to start Foxglove live sink: "+liveError;return false;}lastLiveError=liveError;}}active=true;return true;}
+ void close(){std::lock_guard<std::mutex>l(mu);if(live){live->stop();live.reset();}if(active){writer.close();active=false;}sources.clear();timingCh.registered=false;tfStatic.registered=false;}
+ void emit(Out&c,const std::vector<uint8_t>&data,uint64_t us){add(c);mcap::Message m;m.channelId=c.channel.id;m.sequence=c.sequence++;const auto nowNs=static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch()).count());m.logTime=std::max(nowNs,lastLogTimeNs+1);lastLogTimeNs=m.logTime;m.publishTime=us*1000;m.data=reinterpret_cast<const std::byte*>(data.data());m.dataSize=data.size();writer.write(m);if(live){std::string liveError;if(!live->publish(c.channel.topic,c.schema.name,c.schemaText,data,us*1000,liveError))lastLiveError=liveError;}}
  SourceChannels& source(uint32_t id){
   auto name=options.camera_namespaces.find(id);
   const std::string prefix=name==options.camera_namespaces.end()?bridge::cameraTopicPrefix(id):name->second;
   auto [it,inserted]=sources.try_emplace(id,prefix);
-  if(inserted){add(it->second.color);add(it->second.right);add(it->second.depth);
-    if(options.split_raw_imu){add(it->second.gyro);add(it->second.accel);add(it->second.gyroTime);add(it->second.accelTime);}
-    else add(it->second.imu);
-    add(it->second.colorInfo);add(it->second.rightInfo);add(it->second.depthInfo);add(it->second.parameters);
-    add(it->second.infrared1);add(it->second.infrared2);add(it->second.infrared1Info);add(it->second.infrared2Info);
-    add(it->second.derivedImu);add(it->second.derivedImuTime);}
+  (void)inserted;
   return it->second;
  }
  void writeRawImu(uint32_t id,bool gyro,const std::vector<uint8_t>&timingData,
@@ -72,7 +69,7 @@ class Ros2McapRecorder::Impl { public:
  void write(uint32_t id,Stream stream,const std::vector<uint8_t>&data,uint64_t us){std::lock_guard<std::mutex>l(mu);if(!active)return;auto&s=source(id);emit(channel(s,stream),data,us);}
  void writeTimed(uint32_t id,Stream stream,const std::vector<uint8_t>&timingData,const std::vector<uint8_t>&data,uint64_t us){std::lock_guard<std::mutex>l(mu);if(!active)return;auto&s=source(id);emit(timingCh,timingData,us);emit(channel(s,stream),data,us);}
  void writeGlobal(Out&c,const std::vector<uint8_t>&data,uint64_t us){std::lock_guard<std::mutex>l(mu);if(active)emit(c,data,us);}
- Options options;mutable std::mutex mu;mcap::McapWriter writer;bool active=false;std::map<uint32_t,SourceChannels>sources;Out timingCh,tfStatic;std::unique_ptr<LiveSink>live;std::string lastLiveError;
+ Options options;mutable std::mutex mu;mcap::McapWriter writer;bool active=false;uint64_t lastLogTimeNs=0;std::map<uint32_t,SourceChannels>sources;Out timingCh,tfStatic;std::unique_ptr<LiveSink>live;std::string lastLiveError;
 };
 Ros2McapRecorder::Ros2McapRecorder(Options o):impl_(std::make_unique<Impl>(std::move(o))){} Ros2McapRecorder::~Ros2McapRecorder(){stop();}
 bool Ros2McapRecorder::start(std::string*e){return impl_->open(e);}void Ros2McapRecorder::stop(){impl_->close();}bool Ros2McapRecorder::running()const{std::lock_guard<std::mutex>l(impl_->mu);return impl_->active;}
