@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <mcap/reader.hpp>
 #include <mutex>
+#include <map>
 #include <optional>
 #include <unordered_map>
 #include <unordered_set>
@@ -18,6 +19,9 @@ namespace {
     constexpr uint8_t kImuStream = 3;
     constexpr uint8_t kRightStream = 4;
     constexpr uint8_t kAccelStream = 5;
+    constexpr uint8_t kInfrared1Stream = 6;
+    constexpr uint8_t kInfrared2Stream = 7;
+    constexpr uint8_t kDerivedImuStream = 8;
 
     struct TimingKey {
         uint32_t source_id;
@@ -156,7 +160,8 @@ public:
             const auto& timingTopic = v.channel->topic;
             if (timingTopic != "/amr/camera_timing" &&
                 timingTopic.find("/imu/gyro/device_time") == std::string::npos &&
-                timingTopic.find("/imu/accel/device_time") == std::string::npos)
+                timingTopic.find("/imu/accel/device_time") == std::string::npos &&
+                timingTopic.find("/imu/data/device_time") == std::string::npos)
                 continue;
             try {
                 auto timing = decodeTiming(reinterpret_cast<const uint8_t*>(v.message.data), static_cast<size_t>(v.message.dataSize));
@@ -241,7 +246,8 @@ public:
             try {
                 if (topic == "/amr/camera_timing" ||
                     topic.find("/imu/gyro/device_time") != std::string::npos ||
-                    topic.find("/imu/accel/device_time") != std::string::npos) {
+                    topic.find("/imu/accel/device_time") != std::string::npos ||
+                    topic.find("/imu/data/device_time") != std::string::npos) {
                     previous_iteration_end = std::chrono::steady_clock::now();
                     continue;
                 }
@@ -267,15 +273,62 @@ public:
                     continue;
                 }
                 const auto decode_construct_begin = std::chrono::steady_clock::now();
-                if (topic.find("/color/image_raw") != std::string::npos || topic.find("/right/image_raw") != std::string::npos || topic.find("/depth/image_raw") != std::string::npos) {
+                if(topic.find("/recorder/parameters") != std::string::npos) {
+                    const auto decoded=decodeDiagnosticArray(p,n);
+                    if(decoded.status.empty())throw std::runtime_error("empty camera parameter diagnostic");
+                    bridge::CameraParametersEvent e;
+                    e.source_id=sourceFromTopic(topic);
+                    e.timestamp_us=timestampUs(decoded.header.stamp);
+                    e.serial_number=decoded.status.front().hardware_id;
+                    std::map<std::string,bridge::CameraParameterValue> values;
+                    for(const auto& kv:decoded.status.front().values) {
+                        if(kv.key=="sdk_version") {e.sdk_version=kv.value;continue;}
+                        const auto dot=kv.key.rfind('.');
+                        if(dot==std::string::npos)continue;
+                        const auto name=kv.key.substr(0,dot);
+                        const auto field=kv.key.substr(dot+1);
+                        auto& value=values[name];
+                        value.name=name;
+                        if(field=="requested")value.requested=kv.value;
+                        else if(field=="effective")value.effective=kv.value;
+                        else if(field=="origin")value.origin=kv.value;
+                    }
+                    for(auto& [name,value]:values)e.values.push_back(std::move(value));
+                    c->onCameraParameters(e);
+                } else if (topic.find("/color/image_raw") != std::string::npos || topic.find("/right/image_raw") != std::string::npos || topic.find("/depth/image_raw") != std::string::npos || topic.find("/infrared1/image_raw") != std::string::npos || topic.find("/infrared2/image_raw") != std::string::npos) {
                     auto m = decodeImage(p, n);
                     us = timestampUs(m.header.stamp);
                     const uint32_t source = sourceFromTopic(topic);
                     const bool depth = topic.find("/depth/") != std::string::npos;
                     const bool right = topic.find("/right/") != std::string::npos;
-                    const uint8_t stream = depth ? kDepthStream : (right ? kRightStream : kColorStream);
+                    const bool infrared1 = topic.find("/infrared1/") != std::string::npos;
+                    const bool infrared2 = topic.find("/infrared2/") != std::string::npos;
+                    const uint8_t stream = depth ? kDepthStream : right ? kRightStream :
+                        infrared1 ? kInfrared1Stream : infrared2 ? kInfrared2Stream : kColorStream;
                     const auto timing = findTiming(timingIndex, ambiguousTiming, source, stream, us);
-                    if (depth) {
+                    if (infrared1 || infrared2) {
+                        if (m.encoding != "mono8" || m.step < m.width ||
+                            m.data.size() < static_cast<size_t>(m.step) * m.height)
+                            throw std::runtime_error("invalid infrared image");
+                        bridge::InfraredFrameEvent e;
+                        e.timestamp_us = us;
+                        e.device_timestamp_us = timing ? timing->device_timestamp_us : us;
+                        e.source_id = source;
+                        e.sensor_index = infrared1 ? 1 : 2;
+                        e.timing = timing ? frameTiming(*timing) : bridge::FrameTiming {};
+                        e.frame_id = m.header.frame_id;
+                        e.mono8 = cv::Mat(m.height,m.width,CV_8UC1,m.data.data(),m.step).clone();
+                        const auto callback_begin = std::chrono::steady_clock::now();
+                        recordStage(elapsedUs(decode_construct_begin, callback_begin),
+                            &bridge::ProducerStats::decode_construct_samples,
+                            &bridge::ProducerStats::decode_construct_total_us,
+                            &bridge::ProducerStats::decode_construct_max_us);
+                        c->onInfraredFrame(e);
+                        recordStage(elapsedUs(callback_begin, std::chrono::steady_clock::now()),
+                            &bridge::ProducerStats::consumer_callback_samples,
+                            &bridge::ProducerStats::consumer_callback_total_us,
+                            &bridge::ProducerStats::consumer_callback_max_us);
+                    } else if (depth) {
                         if (m.encoding != "16UC1" || m.step < m.width * 2 || m.data.size() < static_cast<size_t>(m.step) * m.height)
                             throw std::runtime_error("invalid depth image");
                         bridge::DepthFrameEvent e;
@@ -346,6 +399,7 @@ public:
                         ++stats.color_frames_decoded;
                     }
                 } else if (topic.find("/imu/data_raw") != std::string::npos ||
+                           topic.find("/imu/data") != std::string::npos ||
                            topic.find("/imu/gyro") != std::string::npos ||
                            topic.find("/imu/accel") != std::string::npos) {
                     auto m = decodeImu(p, n);
@@ -354,9 +408,11 @@ public:
                     const uint32_t source = sourceFromTopic(topic);
                     const bool rawGyro = topic.find("/imu/gyro") != std::string::npos;
                     const bool rawAccel = topic.find("/imu/accel") != std::string::npos;
+                    const bool derivedImu = topic.find("/imu/data") != std::string::npos &&
+                                            topic.find("/imu/data_raw") == std::string::npos;
                     const auto timing = findTiming(timingIndex, ambiguousTiming, source,
-                        rawAccel ? kAccelStream : kImuStream, e.timestamp_us);
-                    if ((rawGyro || rawAccel) && !timing) {
+                        derivedImu ? kDerivedImuStream : rawAccel ? kAccelStream : kImuStream, e.timestamp_us);
+                    if ((rawGyro || rawAccel || derivedImu) && !timing) {
                         previous_iteration_end = std::chrono::steady_clock::now();
                         continue;
                     }
@@ -373,7 +429,8 @@ public:
                         &bridge::ProducerStats::decode_construct_samples,
                         &bridge::ProducerStats::decode_construct_total_us,
                         &bridge::ProducerStats::decode_construct_max_us);
-                    c->onImuSample(e);
+                    if(derivedImu)c->onDerivedImuSample(e);
+                    else c->onImuSample(e);
                     recordStage(elapsedUs(callback_begin, std::chrono::steady_clock::now()),
                         &bridge::ProducerStats::consumer_callback_samples,
                         &bridge::ProducerStats::consumer_callback_total_us,
@@ -382,7 +439,7 @@ public:
                     ++stats.imu_framesets_received;
                     ++stats.imu_accel_samples;
                     ++stats.imu_gyro_samples;
-                } else if (topic.find("/color/camera_info") != std::string::npos || topic.find("/right/camera_info") != std::string::npos || topic.find("/depth/camera_info") != std::string::npos) {
+                } else if (topic.find("/color/camera_info") != std::string::npos || topic.find("/right/camera_info") != std::string::npos || topic.find("/depth/camera_info") != std::string::npos || topic.find("/infrared1/camera_info") != std::string::npos || topic.find("/infrared2/camera_info") != std::string::npos) {
                     auto m = decodeCameraInfo(p, n);
                     const uint32_t source = sourceFromTopic(topic);
                     auto& e = calibrationBySource[source];
@@ -397,6 +454,14 @@ public:
                         e.has_right = true;
                         e.right_frame_id = m.header.frame_id;
                         set(e.right_intrinsic, e.right_distortion);
+                    } else if (topic.find("/infrared1/") != std::string::npos) {
+                        e.has_infrared1 = true;
+                        e.infrared1_frame_id = m.header.frame_id;
+                        set(e.infrared1_intrinsic, e.infrared1_distortion);
+                    } else if (topic.find("/infrared2/") != std::string::npos) {
+                        e.has_infrared2 = true;
+                        e.infrared2_frame_id = m.header.frame_id;
+                        set(e.infrared2_intrinsic, e.infrared2_distortion);
                     } else {
                         e.has_depth = true;
                         e.depth_frame_id = m.header.frame_id;

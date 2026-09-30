@@ -71,16 +71,31 @@ struct TransformStampedMessage {
 };
 struct TfMessage { std::vector<TransformStampedMessage> transforms; };
 
+struct DiagnosticKeyValue { std::string key; std::string value; };
+struct DiagnosticStatusMessage {
+  uint8_t level = 0;
+  std::string name;
+  std::string message;
+  std::string hardware_id;
+  std::vector<DiagnosticKeyValue> values;
+};
+struct DiagnosticArrayMessage {
+  Header header;
+  std::vector<DiagnosticStatusMessage> status;
+};
+
 std::vector<uint8_t> encode(const ImageMessage& message);
 std::vector<uint8_t> encode(const ImuMessage& message);
 std::vector<uint8_t> encode(const CameraInfoMessage& message);
 std::vector<uint8_t> encode(const TimingMessage& message);
 std::vector<uint8_t> encode(const TfMessage& message);
+std::vector<uint8_t> encode(const DiagnosticArrayMessage& message);
 ImageMessage decodeImage(const uint8_t* data, size_t size);
 ImuMessage decodeImu(const uint8_t* data, size_t size);
 CameraInfoMessage decodeCameraInfo(const uint8_t* data, size_t size);
 TimingMessage decodeTiming(const uint8_t* data, size_t size);
 TfMessage decodeTf(const uint8_t* data, size_t size);
+DiagnosticArrayMessage decodeDiagnosticArray(const uint8_t* data, size_t size);
 
 RosTime rosTimeFromUs(uint64_t timestamp_us);
 uint64_t timestampUs(const RosTime& time);
@@ -91,5 +106,6 @@ const std::string& imuSchema();
 const std::string& cameraInfoSchema();
 const std::string& timingSchema();
 const std::string& tfSchema();
+const std::string& diagnosticArraySchema();
 
 }  // namespace camera_bridge_mcap

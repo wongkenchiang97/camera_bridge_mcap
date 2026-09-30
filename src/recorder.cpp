@@ -16,10 +16,13 @@ CameraInfoMessage info(const bridge::CameraIntrinsic&i,const bridge::CameraDisto
 std::array<double,4> quaternion(const float*r){std::array<double,4>q{};const double trace=r[0]+r[4]+r[8];if(trace>0){const double s=std::sqrt(trace+1.0)*2;q={(r[7]-r[5])/s,(r[2]-r[6])/s,(r[3]-r[1])/s,.25*s};}else if(r[0]>r[4]&&r[0]>r[8]){const double s=std::sqrt(1.0+r[0]-r[4]-r[8])*2;q={.25*s,(r[1]+r[3])/s,(r[2]+r[6])/s,(r[7]-r[5])/s};}else if(r[4]>r[8]){const double s=std::sqrt(1.0+r[4]-r[0]-r[8])*2;q={(r[1]+r[3])/s,.25*s,(r[5]+r[7])/s,(r[2]-r[6])/s};}else{const double s=std::sqrt(1.0+r[8]-r[0]-r[4])*2;q={(r[2]+r[6])/s,(r[5]+r[7])/s,.25*s,(r[3]-r[1])/s};}return q;}
 }
 class Ros2McapRecorder::Impl { public:
- enum class Stream {Color,Right,Depth,Imu,ColorInfo,RightInfo,DepthInfo};
+ enum class Stream {Color,Right,Depth,Imu,ColorInfo,RightInfo,DepthInfo,Parameters,Infrared1,Infrared2,Infrared1Info,Infrared2Info,DerivedImu};
  struct SourceChannels {
   Out color,right,depth,imu,colorInfo,rightInfo,depthInfo;
   Out gyro,accel,gyroTime,accelTime;
+  Out parameters;
+  Out infrared1,infrared2,infrared1Info,infrared2Info;
+  Out derivedImu,derivedImuTime;
   explicit SourceChannels(const std::string& prefix)
       :color(makeChannel((prefix+"/color/image_raw").c_str(),"sensor_msgs/msg/Image",imageSchema())),
        right(makeChannel((prefix+"/right/image_raw").c_str(),"sensor_msgs/msg/Image",imageSchema())),
@@ -31,7 +34,14 @@ class Ros2McapRecorder::Impl { public:
        gyro(makeChannel((prefix+"/imu/gyro").c_str(),"sensor_msgs/msg/Imu",imuSchema())),
        accel(makeChannel((prefix+"/imu/accel").c_str(),"sensor_msgs/msg/Imu",imuSchema())),
        gyroTime(makeChannel((prefix+"/imu/gyro/device_time").c_str(),"camera_bridge_msgs/msg/FrameTiming",timingSchema())),
-       accelTime(makeChannel((prefix+"/imu/accel/device_time").c_str(),"camera_bridge_msgs/msg/FrameTiming",timingSchema())) {}
+       accelTime(makeChannel((prefix+"/imu/accel/device_time").c_str(),"camera_bridge_msgs/msg/FrameTiming",timingSchema())),
+       parameters(makeChannel((prefix+"/recorder/parameters").c_str(),"diagnostic_msgs/msg/DiagnosticArray",diagnosticArraySchema())),
+       infrared1(makeChannel((prefix+"/infrared1/image_raw").c_str(),"sensor_msgs/msg/Image",imageSchema())),
+       infrared2(makeChannel((prefix+"/infrared2/image_raw").c_str(),"sensor_msgs/msg/Image",imageSchema())),
+       infrared1Info(makeChannel((prefix+"/infrared1/camera_info").c_str(),"sensor_msgs/msg/CameraInfo",cameraInfoSchema())),
+       infrared2Info(makeChannel((prefix+"/infrared2/camera_info").c_str(),"sensor_msgs/msg/CameraInfo",cameraInfoSchema())),
+       derivedImu(makeChannel((prefix+"/imu/data").c_str(),"sensor_msgs/msg/Imu",imuSchema())),
+       derivedImuTime(makeChannel((prefix+"/imu/data/device_time").c_str(),"camera_bridge_msgs/msg/FrameTiming",timingSchema())) {}
  };
  explicit Impl(Options o):options(std::move(o)),timingCh(makeChannel("/amr/camera_timing","camera_bridge_msgs/msg/FrameTiming",timingSchema())),tfStatic(makeChannel("/tf_static","tf2_msgs/msg/TFMessage",tfSchema())){}
  void add(Out&c){c.schema.data.resize(c.schemaText.size());std::memcpy(c.schema.data.data(),c.schemaText.data(),c.schemaText.size());writer.addSchema(c.schema);c.channel.schemaId=c.schema.id;writer.addChannel(c.channel);}
@@ -45,7 +55,9 @@ class Ros2McapRecorder::Impl { public:
   if(inserted){add(it->second.color);add(it->second.right);add(it->second.depth);
     if(options.split_raw_imu){add(it->second.gyro);add(it->second.accel);add(it->second.gyroTime);add(it->second.accelTime);}
     else add(it->second.imu);
-    add(it->second.colorInfo);add(it->second.rightInfo);add(it->second.depthInfo);}
+    add(it->second.colorInfo);add(it->second.rightInfo);add(it->second.depthInfo);add(it->second.parameters);
+    add(it->second.infrared1);add(it->second.infrared2);add(it->second.infrared1Info);add(it->second.infrared2Info);
+    add(it->second.derivedImu);add(it->second.derivedImuTime);}
   return it->second;
  }
  void writeRawImu(uint32_t id,bool gyro,const std::vector<uint8_t>&timingData,
@@ -55,8 +67,10 @@ class Ros2McapRecorder::Impl { public:
   if(options.write_timing_metadata)emit(gyro?s.gyroTime:s.accelTime,timingData,us);
   emit(payload,data,us);
  }
- void write(uint32_t id,Stream stream,const std::vector<uint8_t>&data,uint64_t us){std::lock_guard<std::mutex>l(mu);if(!active)return;auto&s=source(id);Out*c=stream==Stream::Color?&s.color:stream==Stream::Right?&s.right:stream==Stream::Depth?&s.depth:stream==Stream::Imu?&s.imu:stream==Stream::ColorInfo?&s.colorInfo:stream==Stream::RightInfo?&s.rightInfo:&s.depthInfo;emit(*c,data,us);}
- void writeTimed(uint32_t id,Stream stream,const std::vector<uint8_t>&timingData,const std::vector<uint8_t>&data,uint64_t us){std::lock_guard<std::mutex>l(mu);if(!active)return;auto&s=source(id);Out*c=stream==Stream::Color?&s.color:stream==Stream::Right?&s.right:stream==Stream::Depth?&s.depth:&s.imu;emit(timingCh,timingData,us);emit(*c,data,us);}
+ Out& channel(SourceChannels&s,Stream stream){switch(stream){case Stream::Color:return s.color;case Stream::Right:return s.right;case Stream::Depth:return s.depth;case Stream::Imu:return s.imu;case Stream::ColorInfo:return s.colorInfo;case Stream::RightInfo:return s.rightInfo;case Stream::DepthInfo:return s.depthInfo;case Stream::Parameters:return s.parameters;case Stream::Infrared1:return s.infrared1;case Stream::Infrared2:return s.infrared2;case Stream::Infrared1Info:return s.infrared1Info;case Stream::Infrared2Info:return s.infrared2Info;case Stream::DerivedImu:return s.derivedImu;}return s.color;}
+ void writeDerivedImu(uint32_t id,const std::vector<uint8_t>&timingData,const std::vector<uint8_t>&data,uint64_t us){std::lock_guard<std::mutex>l(mu);if(!active)return;auto&s=source(id);emit(s.derivedImuTime,timingData,us);emit(s.derivedImu,data,us);}
+ void write(uint32_t id,Stream stream,const std::vector<uint8_t>&data,uint64_t us){std::lock_guard<std::mutex>l(mu);if(!active)return;auto&s=source(id);emit(channel(s,stream),data,us);}
+ void writeTimed(uint32_t id,Stream stream,const std::vector<uint8_t>&timingData,const std::vector<uint8_t>&data,uint64_t us){std::lock_guard<std::mutex>l(mu);if(!active)return;auto&s=source(id);emit(timingCh,timingData,us);emit(channel(s,stream),data,us);}
  void writeGlobal(Out&c,const std::vector<uint8_t>&data,uint64_t us){std::lock_guard<std::mutex>l(mu);if(active)emit(c,data,us);}
  Options options;mutable std::mutex mu;mcap::McapWriter writer;bool active=false;std::map<uint32_t,SourceChannels>sources;Out timingCh,tfStatic;std::unique_ptr<LiveSink>live;std::string lastLiveError;
 };
@@ -65,6 +79,7 @@ bool Ros2McapRecorder::start(std::string*e){return impl_->open(e);}void Ros2Mcap
 void Ros2McapRecorder::onColorFrame(const bridge::ColorFrameEvent&e){const auto frame=bridge::cameraColorOpticalFrame(e.source_id);ImageMessage m;m.header={rosTimeFromUs(e.timestamp_us),frame};m.height=e.bgr.rows;m.width=e.bgr.cols;m.encoding="bgr8";m.step=e.bgr.cols*3;m.data=bytes(e.bgr);const auto data=encode(m);if(impl_->options.write_timing_metadata)impl_->writeTimed(e.source_id,Impl::Stream::Color,encode(timing(1,e.source_id,e.timestamp_us,e.device_timestamp_us,e.timing,frame)),data,e.timestamp_us);else impl_->write(e.source_id,Impl::Stream::Color,data,e.timestamp_us);}
 void Ros2McapRecorder::onRightFrame(const bridge::RightFrameEvent&e){const auto frame=bridge::cameraRightOpticalFrame(e.source_id);ImageMessage m;m.header={rosTimeFromUs(e.timestamp_us),frame};m.height=e.bgr.rows;m.width=e.bgr.cols;m.encoding="bgr8";m.step=e.bgr.cols*3;m.data=bytes(e.bgr);const auto data=encode(m);if(impl_->options.write_timing_metadata)impl_->writeTimed(e.source_id,Impl::Stream::Right,encode(timing(4,e.source_id,e.timestamp_us,e.device_timestamp_us,e.timing,frame)),data,e.timestamp_us);else impl_->write(e.source_id,Impl::Stream::Right,data,e.timestamp_us);}
 void Ros2McapRecorder::onDepthFrame(const bridge::DepthFrameEvent&e){const auto frame=bridge::cameraDepthOpticalFrame(e.source_id);ImageMessage m;m.header={rosTimeFromUs(e.timestamp_us),frame};m.height=e.depth_mono16.rows;m.width=e.depth_mono16.cols;m.encoding="16UC1";m.step=e.depth_mono16.cols*2;m.data=bytes(e.depth_mono16);const auto data=encode(m);if(impl_->options.write_timing_metadata)impl_->writeTimed(e.source_id,Impl::Stream::Depth,encode(timing(2,e.source_id,e.timestamp_us,e.device_timestamp_us,e.timing,frame)),data,e.timestamp_us);else impl_->write(e.source_id,Impl::Stream::Depth,data,e.timestamp_us);}
+void Ros2McapRecorder::onInfraredFrame(const bridge::InfraredFrameEvent&e){if(e.sensor_index!=1&&e.sensor_index!=2)return;const auto frame=bridge::cameraInfraredOpticalFrame(e.source_id,e.sensor_index);ImageMessage m;m.header={rosTimeFromUs(e.timestamp_us),frame};m.height=e.mono8.rows;m.width=e.mono8.cols;m.encoding="mono8";m.step=e.mono8.cols;m.data=bytes(e.mono8);const auto data=encode(m);const auto stream=e.sensor_index==1?Impl::Stream::Infrared1:Impl::Stream::Infrared2;if(impl_->options.write_timing_metadata)impl_->writeTimed(e.source_id,stream,encode(timing(e.sensor_index==1?6:7,e.source_id,e.timestamp_us,e.device_timestamp_us,e.timing,frame)),data,e.timestamp_us);else impl_->write(e.source_id,stream,data,e.timestamp_us);}
 void Ros2McapRecorder::onImuSample(const bridge::ImuSampleEvent&e){
  const auto frame=e.frame_id.empty()?bridge::cameraImuFrame(e.source_id):e.frame_id;
  ImuMessage m;m.header={rosTimeFromUs(e.timestamp_us),frame};
@@ -80,6 +95,8 @@ void Ros2McapRecorder::onImuSample(const bridge::ImuSampleEvent&e){
   impl_->writeTimed(e.source_id,Impl::Stream::Imu,encode(timing(3,e.source_id,e.timestamp_us,e.device_timestamp_us,e.timing,frame)),data,e.timestamp_us);
  else impl_->write(e.source_id,Impl::Stream::Imu,data,e.timestamp_us);
 }
+void Ros2McapRecorder::onDerivedImuSample(const bridge::ImuSampleEvent&e){if(!e.has_gyro||!e.has_accel||e.device_timestamp_us==0)return;const auto frame=e.frame_id.empty()?bridge::cameraImuFrame(e.source_id):e.frame_id;ImuMessage m;m.header={rosTimeFromUs(e.timestamp_us),frame};m.angular_velocity={e.gyro.x,e.gyro.y,e.gyro.z};m.linear_acceleration={e.accel.x,e.accel.y,e.accel.z};impl_->writeDerivedImu(e.source_id,encode(timing(8,e.source_id,e.timestamp_us,e.device_timestamp_us,e.timing,frame)),encode(m),e.timestamp_us);}
 void Ros2McapRecorder::onExtrinsics(const bridge::ExtrinsicsEvent&e){TfMessage m;for(const auto&x:e.transforms){TransformStampedMessage t;t.header={rosTimeFromUs(e.timestamp_us),x.parent_frame_id};t.child_frame_id=x.child_frame_id;const double scale=x.extrinsic.translation_scale_to_meters;t.translation={x.extrinsic.trans[0]*scale,x.extrinsic.trans[1]*scale,x.extrinsic.trans[2]*scale};t.rotation=quaternion(x.extrinsic.rot);m.transforms.push_back(std::move(t));}impl_->writeGlobal(impl_->tfStatic,encode(m),e.timestamp_us);}
-void Ros2McapRecorder::onCameraCalibration(const bridge::CameraCalibrationEvent&e){if(e.has_color)impl_->write(e.source_id,Impl::Stream::ColorInfo,encode(info(e.color_intrinsic,e.color_distortion,e.timestamp_us,bridge::cameraColorOpticalFrame(e.source_id))),e.timestamp_us);if(e.has_right)impl_->write(e.source_id,Impl::Stream::RightInfo,encode(info(e.right_intrinsic,e.right_distortion,e.timestamp_us,bridge::cameraRightOpticalFrame(e.source_id))),e.timestamp_us);if(e.has_depth)impl_->write(e.source_id,Impl::Stream::DepthInfo,encode(info(e.depth_intrinsic,e.depth_distortion,e.timestamp_us,bridge::cameraDepthOpticalFrame(e.source_id))),e.timestamp_us);}
+void Ros2McapRecorder::onCameraCalibration(const bridge::CameraCalibrationEvent&e){if(e.has_color)impl_->write(e.source_id,Impl::Stream::ColorInfo,encode(info(e.color_intrinsic,e.color_distortion,e.timestamp_us,bridge::cameraColorOpticalFrame(e.source_id))),e.timestamp_us);if(e.has_right)impl_->write(e.source_id,Impl::Stream::RightInfo,encode(info(e.right_intrinsic,e.right_distortion,e.timestamp_us,bridge::cameraRightOpticalFrame(e.source_id))),e.timestamp_us);if(e.has_depth)impl_->write(e.source_id,Impl::Stream::DepthInfo,encode(info(e.depth_intrinsic,e.depth_distortion,e.timestamp_us,bridge::cameraDepthOpticalFrame(e.source_id))),e.timestamp_us);if(e.has_infrared1)impl_->write(e.source_id,Impl::Stream::Infrared1Info,encode(info(e.infrared1_intrinsic,e.infrared1_distortion,e.timestamp_us,bridge::cameraInfraredOpticalFrame(e.source_id,1))),e.timestamp_us);if(e.has_infrared2)impl_->write(e.source_id,Impl::Stream::Infrared2Info,encode(info(e.infrared2_intrinsic,e.infrared2_distortion,e.timestamp_us,bridge::cameraInfraredOpticalFrame(e.source_id,2))),e.timestamp_us);}
+void Ros2McapRecorder::onCameraParameters(const bridge::CameraParametersEvent&e){DiagnosticArrayMessage m;m.header={rosTimeFromUs(e.timestamp_us),bridge::cameraColorOpticalFrame(e.source_id)};DiagnosticStatusMessage s;s.name="/camera"+std::to_string(e.source_id)+"/recorder/parameters";s.message="effective RealSense settings";s.hardware_id=e.serial_number;s.values.push_back({"sdk_version",e.sdk_version});for(const auto&v:e.values){s.values.push_back({v.name+".requested",v.requested});s.values.push_back({v.name+".effective",v.effective});s.values.push_back({v.name+".origin",v.origin});}m.status.push_back(std::move(s));impl_->write(e.source_id,Impl::Stream::Parameters,encode(m),e.timestamp_us);}
 } // namespace camera_bridge_mcap

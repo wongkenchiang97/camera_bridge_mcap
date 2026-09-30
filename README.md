@@ -51,15 +51,22 @@ Existing callers still use `/imu/data_raw` by default. The ROS 2 MCAP
 channels now include the profile's `offered_qos_profiles` metadata key as an
 empty YAML sequence; live ROS 2 bag behavior remains unverified.
 
-The MSVC build and 3/3 CTest suite pass, including a new two-source synthetic
-split-IMU test that checks exact companion stamps, raw timestamps, and
-readback without conversion. No real RealSense recording or WSL ROS 2 bag
-inspection has been performed. Next require a camera capture with distinct
-gyro/accel device-time monotonicity, unambiguous pairing, MCAP integrity,
+The standalone MSVC build and 3/3 CTest suite pass, including a two-source
+synthetic split-IMU test extended to check IR, derived IMU, and parameter
+snapshot round trips and exact timing companions. The nested MCAP tests have
+intermittently timed out when run from the RealSense build tree; the
+standalone MCAP result does not resolve that aggregate-test behavior. No real
+RealSense recording or WSL ROS 2 bag inspection has been performed. Next
+require a camera capture with distinct gyro/accel device-time monotonicity,
+unambiguous pairing, MCAP integrity,
 ROS 2 bag readability, and unchanged legacy round-trip behavior before
-calling the format production-compatible. Infrared and optional derived
-unified IMU streams remain separate implementation work in
-`realsense_bridge/RECORDER.md`.
+calling the format production-compatible. The current uncommitted extension
+also records IR1/IR2 `mono8` frames and calibration, a standard
+`/cameraN/recorder/parameters` diagnostic snapshot, and an optional derived
+`/cameraN/imu/data` stream with its own exact-time companion. Derived IMU
+replay has a separate callback and cannot double-count as raw motion. These
+extensions pass synthetic round trips but still require a real-device and
+ROS 2 bag check; see `realsense_bridge/RECORDER.md`.
 
 Frame IDs are always numbered, including single-camera recordings:
 `camera0_color_optical_frame`, `camera0_right_optical_frame`,

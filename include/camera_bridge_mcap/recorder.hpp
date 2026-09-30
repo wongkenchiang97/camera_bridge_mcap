@@ -42,6 +42,9 @@ class Ros2McapRecorder final : public bridge::IFrameConsumer {
   void onImuSample(const bridge::ImuSampleEvent& event) override;
   void onExtrinsics(const bridge::ExtrinsicsEvent& event) override;
   void onCameraCalibration(const bridge::CameraCalibrationEvent& event) override;
+  void onCameraParameters(const bridge::CameraParametersEvent& event) override;
+  void onInfraredFrame(const bridge::InfraredFrameEvent& event) override;
+  void onDerivedImuSample(const bridge::ImuSampleEvent& event) override;
 
  private:
   class Impl;
