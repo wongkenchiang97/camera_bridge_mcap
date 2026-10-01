@@ -152,7 +152,8 @@ samples are `16UC1` and contain 99.45%, 99.38%, and 99.37% nonzero pixels.
 ## Optional Foxglove live sink
 
 The recorder can expose the same ROS 2 CDR messages to Foxglove over a
-WebSocket while writing the MCAP file. This remains vendor-independent: it
+WebSocket while writing the MCAP file, or publish without writing an MCAP.
+This remains vendor-independent: it
 receives only `camera_bridge_core` events and has no Orbbec or RealSense SDK
 dependency. MCAP recording is authoritative; live publication is disabled by
 default and a live-server failure does not stop recording unless
@@ -169,10 +170,12 @@ cmake --build build-ninja-msvc-foxglove
 ctest --test-dir build-ninja-msvc-foxglove --output-on-failure
 ```
 
-At runtime set `Ros2McapRecorder::Options::live_publish_enabled = true`.
-The default endpoint is `ws://127.0.0.1:8765`; host and port are configurable.
+At runtime set `Ros2McapRecorder::Options::live_publish_enabled = true`. To
+run without recording, also set `write_mcap = false`; `open()` then requires
+live publication and creates no output file. The default endpoint is `ws://127.0.0.1:8765`; host and port are configurable.
 Foxglove sees the same numbered camera topics and embedded `ros2msg` schemas
-that are written to MCAP.
+as an MCAP recording would contain. The RealSense CLI exposes this mode with
+`--preview-only`; see `../realsense_bridge/RECORDER.md` for its command.
 
 ## Status
 
@@ -246,3 +249,42 @@ Next work:
    recordings.
 4. Add rosbag2 `metadata.yaml`, segmentation, mapping profiles, and standalone
    recorder/player CLI tools as product requirements mature.
+
+## ROS 2 timing message support
+
+The recorder remains ROS-runtime-free. Its custom timing channels use
+`camera_bridge_msgs/msg/FrameTiming`, defined in
+`ros/camera_bridge_msgs/msg/FrameTiming.msg` to match the embedded MCAP
+schema. Build this small interface package before using the ROS 2 bag API to
+deserialize timing companions:
+
+```bash
+colcon --log-base build-ros-msgs/log build \
+  --paths ros/camera_bridge_msgs --packages-select camera_bridge_msgs \
+  --build-base build-ros-msgs/build \
+  --install-base build-ros-msgs/install
+source build-ros-msgs/install/setup.bash
+```
+
+The ROS package supplies type support for bag readers; the recorder and bridge
+replay producer do not link against it. In a Linux D455 smoke capture on
+2026-09-30, the ROS 2 bag API deserialized all 2,294 messages, including the
+custom timing type. Bridge replay matched MCAP counts for 97 color, 97 depth,
+721 raw gyro, and 230 raw accel messages. Two calibration events, one
+extrinsics event, and one parameter snapshot were also replayed. This is a
+single-camera validation; the two-camera gate remains open.
+
+The two-D455 Linux capture on 2026-09-30 exposed generic `/tf_static`
+frame IDs shared by both cameras. The RealSense recorder now writes
+`cameraN_color_optical_frame` and `cameraN_depth_optical_frame`, and MCAP
+replay restores the source ID from the parent frame. The regression test
+covers camera1 static extrinsics; legacy generic frames continue to map to
+source 0. The corrected two-camera capture replayed one extrinsics callback
+per camera, alongside exact color, depth, raw gyro, and raw accel counts.
+
+On Linux, the in-tree Foxglove SDK monorepo layout needs the C header under
+`c/include/foxglove-c` and the shared library under `target/release`; CMake
+now locates both when `FOXGLOVE_SDK_ROOT` points to `cpp/foxglove`. A separate
+RealSense recorder build can enable this sink and publish the standard image
+channels to `ws://127.0.0.1:8765` while continuing to write MCAP. See
+`../realsense_bridge/RECORDER.md` for the preview config and command.

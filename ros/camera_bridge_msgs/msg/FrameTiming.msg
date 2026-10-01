@@ -1,0 +1,10 @@
+std_msgs/Header header
+uint32 source_id
+uint8 stream_kind
+uint64 host_timestamp_us
+uint64 device_timestamp_us
+uint64 driver_receive_steady_us
+uint64 capture_steady_us
+bool capture_steady_valid
+uint8 timestamp_source
+float64 clock_mapping_uncertainty_us

@@ -14,6 +14,8 @@ class Ros2McapRecorder final : public bridge::IFrameConsumer {
  public:
   struct Options {
     std::filesystem::path output_path;
+    // Publish through the live sink without opening an MCAP writer.
+    bool write_mcap = true;
     std::string color_frame_id = "camera_color_optical_frame";
     std::string depth_frame_id = "camera_depth_optical_frame";
     std::string imu_frame_id = "camera_imu_frame";

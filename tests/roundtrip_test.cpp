@@ -176,6 +176,23 @@ int main()
         || producerStats.consumer_callback_samples != 8
         || producerStats.consumer_callback_max_us < 1000)
         return 10;
+#ifdef CAMERA_BRIDGE_MCAP_TEST_LIVE_SINK
+    const auto recorded_size = fs::file_size(path);
+    Ros2McapRecorder::Options preview_options;
+    preview_options.output_path = path; // Existing recording must remain untouched.
+    preview_options.write_mcap = false;
+    preview_options.live_publish_enabled = true;
+    preview_options.live_publish_required = true;
+    preview_options.live_publish_port = 0;
+    Ros2McapRecorder preview(preview_options);
+    if (!preview.start(&error)) { std::cerr << error; return 11; }
+    preview.onColorFrame(color);
+    preview.stop();
+    if (fs::file_size(path) != recorded_size) return 12;
+    preview_options.live_publish_enabled = false;
+    Ros2McapRecorder invalid_preview(preview_options);
+    if (invalid_preview.start(&error)) return 13;
+#endif
     fs::remove(path, ec);
     std::cout << "MCAP round trip passed\n";
     return 0;

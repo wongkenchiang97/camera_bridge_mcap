@@ -12,7 +12,7 @@
 #include "camera_bridge_mcap/ros2_messages.hpp"
 
 struct Sink final : bridge::IFrameConsumer {
-  int gyro=0,accel=0,secondCamera=0,infrared=0,derived=0,parameters=0;
+  int gyro=0,accel=0,secondCamera=0,infrared=0,derived=0,parameters=0,secondExtrinsics=0;
   void onColorFrame(const bridge::ColorFrameEvent&) override {}
   void onRightFrame(const bridge::RightFrameEvent&) override {}
   void onDepthFrame(const bridge::DepthFrameEvent&) override {}
@@ -21,7 +21,9 @@ struct Sink final : bridge::IFrameConsumer {
     if(e.has_accel&&!e.has_gyro&&e.device_timestamp_us==222)++accel;
     if(e.source_id==1&&e.has_gyro&&e.device_timestamp_us==333)++secondCamera;
   }
-  void onExtrinsics(const bridge::ExtrinsicsEvent&) override {}
+  void onExtrinsics(const bridge::ExtrinsicsEvent& e) override {
+    if(e.source_id==1&&e.transforms.size()==1)++secondExtrinsics;
+  }
   void onCameraCalibration(const bridge::CameraCalibrationEvent&) override {}
   void onInfraredFrame(const bridge::InfraredFrameEvent& e) override {
     if(e.sensor_index==1&&e.device_timestamp_us==444&&e.mono8.cols==2&&
@@ -79,6 +81,14 @@ int main() {
   combined.timestamp_us=1000006;combined.device_timestamp_us=555;
   combined.has_accel=true;combined.accel={7,8,9};
   recorder.onDerivedImuSample(combined);
+  bridge::ExtrinsicsEvent extrinsics;
+  extrinsics.source_id=1;
+  extrinsics.timestamp_us=1000007;
+  bridge::ExtrinsicTransformEvent transform;
+  transform.parent_frame_id="camera1_color_optical_frame";
+  transform.child_frame_id="camera1_depth_optical_frame";
+  extrinsics.transforms.push_back(transform);
+  recorder.onExtrinsics(extrinsics);
   recorder.stop();
 
   mcap::McapReader reader;
@@ -151,7 +161,7 @@ int main() {
   for(int i=0;i<200&&producer.running();++i)
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
   producer.stop();
-  if(sink.gyro!=1||sink.accel!=1||sink.secondCamera!=1||sink.infrared!=1||sink.derived!=1||sink.parameters!=1)return 6;
+  if(sink.gyro!=1||sink.accel!=1||sink.secondCamera!=1||sink.infrared!=1||sink.derived!=1||sink.parameters!=1||sink.secondExtrinsics!=1)return 6;
   std::error_code ec;
   fs::remove(path,ec);
   return 0;

@@ -103,6 +103,18 @@ namespace {
             throw std::runtime_error("invalid camera source topic");
         return static_cast<uint32_t>(std::stoul(topic.substr(sizeof(prefix) - 1, end - (sizeof(prefix) - 1))));
     }
+    uint32_t sourceFromFrameId(const std::string& frame_id)
+    {
+        constexpr char prefix[] = "camera";
+        if (frame_id.rfind(prefix, 0) != 0)
+            return 0; // Legacy single-camera transforms used generic frame IDs.
+        size_t end = sizeof(prefix) - 1;
+        while (end < frame_id.size() && frame_id[end] >= '0' && frame_id[end] <= '9')
+            ++end;
+        if (end == sizeof(prefix) - 1 || end >= frame_id.size() || frame_id[end] != '_')
+            return 0;
+        return static_cast<uint32_t>(std::stoul(frame_id.substr(sizeof(prefix) - 1, end - (sizeof(prefix) - 1))));
+    }
     std::optional<TimingMessage> findTiming(const TimingIndex& index,
         const AmbiguousTiming& ambiguous, uint32_t source, uint8_t kind, uint64_t host)
     {
@@ -480,8 +492,10 @@ public:
                 } else if (topic == "/tf_static") {
                     auto m = decodeTf(p, n);
                     bridge::ExtrinsicsEvent e;
-                    if (!m.transforms.empty())
+                    if (!m.transforms.empty()) {
                         e.timestamp_us = timestampUs(m.transforms.front().header.stamp);
+                        e.source_id = sourceFromFrameId(m.transforms.front().header.frame_id);
+                    }
                     for (const auto& t : m.transforms) {
                         bridge::ExtrinsicTransformEvent x;
                         x.parent_frame_id = t.header.frame_id;

@@ -66,8 +66,13 @@ target_link_libraries(camera_bridge_mcap
   PRIVATE unofficial::mcap::mcap)
 
 if(CAMERA_BRIDGE_MCAP_WITH_FOXGLOVE)
+  find_path(FOXGLOVE_C_INCLUDE_DIR foxglove-c/foxglove-c.h
+    PATHS "${FOXGLOVE_SDK_ROOT}/include"
+          "${FOXGLOVE_SDK_ROOT}/../../c/include"
+    NO_DEFAULT_PATH REQUIRED)
   find_library(FOXGLOVE_LIBRARY NAMES foxglove
     PATHS "${FOXGLOVE_SDK_ROOT}/lib" "${FOXGLOVE_SDK_ROOT}/lib64"
+          "${FOXGLOVE_SDK_ROOT}/../../target/release"
     NO_DEFAULT_PATH REQUIRED)
 
   # The distributed foxglove library contains the C ABI. Its public C++ API is
@@ -87,7 +92,7 @@ if(CAMERA_BRIDGE_MCAP_WITH_FOXGLOVE)
     "${FOXGLOVE_SDK_ROOT}/src/server/service.cpp"
   )
   target_include_directories(camera_bridge_foxglove_cpp
-    PUBLIC "${FOXGLOVE_SDK_ROOT}/include")
+    PUBLIC "${FOXGLOVE_SDK_ROOT}/include" "${FOXGLOVE_C_INCLUDE_DIR}")
   target_link_libraries(camera_bridge_foxglove_cpp PUBLIC "${FOXGLOVE_LIBRARY}")
   if(WIN32)
     target_link_libraries(camera_bridge_foxglove_cpp PUBLIC
@@ -100,7 +105,8 @@ if(CAMERA_BRIDGE_MCAP_WITH_FOXGLOVE)
   endif()
 
   target_sources(camera_bridge_mcap PRIVATE src/foxglove_live_sink.cpp)
-  target_include_directories(camera_bridge_mcap PRIVATE "${FOXGLOVE_SDK_ROOT}/include")
+  target_include_directories(camera_bridge_mcap PRIVATE
+    "${FOXGLOVE_SDK_ROOT}/include" "${FOXGLOVE_C_INCLUDE_DIR}")
   target_link_libraries(camera_bridge_mcap PRIVATE camera_bridge_foxglove_cpp)
   target_compile_definitions(camera_bridge_mcap PRIVATE CAMERA_BRIDGE_MCAP_WITH_FOXGLOVE=1)
   if(WIN32 AND EXISTS "${FOXGLOVE_SDK_ROOT}/lib/foxglove.dll")

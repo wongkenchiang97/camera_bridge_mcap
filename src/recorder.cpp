@@ -46,10 +46,78 @@ class Ros2McapRecorder::Impl { public:
        derivedImuTime(makeChannel((prefix+"/imu/data/device_time").c_str(),"camera_bridge_msgs/msg/FrameTiming",timingSchema())) {}
  };
  explicit Impl(Options o):options(std::move(o)),timingCh(makeChannel("/amr/camera_timing","camera_bridge_msgs/msg/FrameTiming",timingSchema())),tfStatic(makeChannel("/tf_static","tf2_msgs/msg/TFMessage",tfSchema())){}
- void add(Out&c){if(c.registered)return;c.schema.data.resize(c.schemaText.size());std::memcpy(c.schema.data.data(),c.schemaText.data(),c.schemaText.size());writer.addSchema(c.schema);c.channel.schemaId=c.schema.id;writer.addChannel(c.channel);c.registered=true;}
- bool open(std::string*error){std::lock_guard<std::mutex>l(mu);if(active)return true;std::error_code ec;if(!options.output_path.parent_path().empty())std::filesystem::create_directories(options.output_path.parent_path(),ec);if(ec){if(error)*error=ec.message();return false;}mcap::McapWriterOptions o("ros2");o.chunkSize=options.chunk_size_bytes;o.compression=options.use_zstd?mcap::Compression::Zstd:mcap::Compression::None;auto s=writer.open(options.output_path.string(),o);if(!s.ok()){if(error)*error=s.message;return false;}lastLogTimeNs=0;if(options.live_publish_enabled){live=createLiveSink();std::string liveError;if(!live->start(options.live_publish_host,options.live_publish_port,liveError)){live.reset();if(options.live_publish_required){writer.close();if(error)*error="failed to start Foxglove live sink: "+liveError;return false;}lastLiveError=liveError;}}active=true;return true;}
- void close(){std::lock_guard<std::mutex>l(mu);if(live){live->stop();live.reset();}if(active){writer.close();active=false;}sources.clear();timingCh.registered=false;tfStatic.registered=false;}
- void emit(Out&c,const std::vector<uint8_t>&data,uint64_t us){add(c);mcap::Message m;m.channelId=c.channel.id;m.sequence=c.sequence++;const auto nowNs=static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch()).count());m.logTime=std::max(nowNs,lastLogTimeNs+1);lastLogTimeNs=m.logTime;m.publishTime=us*1000;m.data=reinterpret_cast<const std::byte*>(data.data());m.dataSize=data.size();writer.write(m);if(live){std::string liveError;if(!live->publish(c.channel.topic,c.schema.name,c.schemaText,data,us*1000,liveError))lastLiveError=liveError;}}
+ void add(Out& c) {
+  if(!options.write_mcap||c.registered)return;
+  writer.addSchema(c.schema);
+  c.channel.schemaId=c.schema.id;
+  writer.addChannel(c.channel);
+  c.registered=true;
+ }
+ bool open(std::string* error) {
+  std::lock_guard<std::mutex> lock(mu);
+  if(active)return true;
+  if(!options.write_mcap&&!options.live_publish_enabled) {
+   if(error)*error="preview-only mode requires live publishing";
+   return false;
+  }
+  if(options.write_mcap) {
+   std::error_code ec;
+   if(!options.output_path.parent_path().empty())
+    std::filesystem::create_directories(options.output_path.parent_path(),ec);
+   if(ec){if(error)*error=ec.message();return false;}
+   mcap::McapWriterOptions writerOptions("ros2");
+   writerOptions.chunkSize=options.chunk_size_bytes;
+   writerOptions.compression=options.use_zstd?mcap::Compression::Zstd:mcap::Compression::None;
+   const auto status=writer.open(options.output_path.string(),writerOptions);
+   if(!status.ok()){if(error)*error=status.message;return false;}
+   lastLogTimeNs=0;
+  }
+  if(options.live_publish_enabled) {
+   live=createLiveSink();
+   std::string liveError;
+   if(!live->start(options.live_publish_host,options.live_publish_port,liveError)) {
+    live.reset();
+    if(options.live_publish_required||!options.write_mcap) {
+     if(options.write_mcap)writer.close();
+     if(error)*error="failed to start Foxglove live sink: "+liveError;
+     return false;
+    }
+    lastLiveError=liveError;
+   }
+  }
+  active=true;
+  return true;
+ }
+ void close() {
+  std::lock_guard<std::mutex> lock(mu);
+  if(live){live->stop();live.reset();}
+  if(active&&options.write_mcap)writer.close();
+  active=false;
+  sources.clear();
+  timingCh.registered=false;
+  tfStatic.registered=false;
+ }
+ void emit(Out& c,const std::vector<uint8_t>& data,uint64_t us) {
+  if(options.write_mcap) {
+   add(c);
+   mcap::Message message;
+   message.channelId=c.channel.id;
+   message.sequence=c.sequence++;
+   const auto nowNs=static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+       std::chrono::system_clock::now().time_since_epoch()).count());
+   message.logTime=std::max(nowNs,lastLogTimeNs+1);
+   lastLogTimeNs=message.logTime;
+   message.publishTime=us*1000;
+   message.data=reinterpret_cast<const std::byte*>(data.data());
+   message.dataSize=data.size();
+   writer.write(message);
+  }
+  if(live) {
+   std::string liveError;
+   if(!live->publish(c.channel.topic,c.schema.name,c.schemaText,data,us*1000,liveError))
+    lastLiveError=liveError;
+  }
+ }
  SourceChannels& source(uint32_t id){
   auto name=options.camera_namespaces.find(id);
   const std::string prefix=name==options.camera_namespaces.end()?bridge::cameraTopicPrefix(id):name->second;
