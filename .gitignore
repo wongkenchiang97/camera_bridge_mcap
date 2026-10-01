@@ -10,3 +10,18 @@
 Thumbs.db
 *.log
 *.mcap
+
+# Captured camera data and ROS 2 bag databases.
+*.db3
+*.sqlite3
+*.bag
+*.svo
+*.svo2
+/recordings/
+/bags/
+/rosbags/
+
+# Generated validation outputs; keep configs and reports elsewhere trackable.
+/validation/
+/validation_outputs/
+/validation_results/
